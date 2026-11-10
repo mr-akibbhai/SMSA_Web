@@ -35,6 +35,21 @@ const emptyCommitteeForm = {
   display_order: 0
 };
 
+// BATCH NAME DISPLAY FORMAT
+function formatBatchName(name) {
+  if (!name) return "";
+
+  const batchMatch = String(name)
+    .trim()
+    .match(/^batch[-\s]*(\d{4})$/i);
+
+  if (batchMatch) {
+    return `Dakhil-${batchMatch[1]}`;
+  }
+
+  return name;
+}
+
 export default function App() {
   const [page, setPage] = useState("Home");
   const [menuOpen, setMenuOpen] = useState(false);
@@ -888,11 +903,11 @@ export default function App() {
   });
 
   const filteredBatchNames = displayedBatchNames.filter(name =>
-    name.toLowerCase().includes(search.toLowerCase())
+    formatBatchName(name).toLowerCase().includes(search.toLowerCase())
   );
 
   const filteredAlumni = alumni.filter(person =>
-    `${person.full_name || ""} ${person.batch || ""} ${person.passing_year || ""}`
+    `${person.full_name || ""} ${formatBatchName(person.batch) || ""} ${person.passing_year || ""}`
       .toLowerCase()
       .includes(search.toLowerCase())
   );
@@ -921,7 +936,7 @@ export default function App() {
         <option value="">Select Batch</option>
         {options.map(batch => (
           <option key={batch.id} value={batch.name}>
-            {batch.name}{!batch.is_active ? " (Inactive)" : ""}
+            {formatBatchName(batch.name)}{!batch.is_active ? " (Inactive)" : ""}
           </option>
         ))}
       </select>
@@ -1125,7 +1140,7 @@ export default function App() {
           <section className="page-section container">
             <PageHeading
               label="OUR NETWORK"
-              title={selectedBatch ? selectedBatch : "Meet Our Alumni"}
+              title={selectedBatch ? formatBatchName(selectedBatch) : "Meet Our Alumni"}
             />
 
             {!selectedBatch && (
@@ -1234,7 +1249,7 @@ export default function App() {
                       </div>
 
                       <h3>{person.full_name}</h3>
-                      <p>Batch: {person.batch || "Not specified"}</p>
+                      <p>Batch: {formatBatchName(person.batch) || "Not specified"}</p>
                       <span>
                         Passing Year: {person.passing_year || "N/A"}
                       </span>
@@ -1243,7 +1258,7 @@ export default function App() {
 
                   {selectedBatchAlumni.length === 0 && (
                     <p className="empty-state">
-                      No alumni found in {selectedBatch}.
+                      No alumni found in {formatBatchName(selectedBatch)}.
                     </p>
                   )}
                 </div>
@@ -1272,7 +1287,7 @@ export default function App() {
                           <GraduationCap size={30} />
                         </div>
 
-                        <h3>{batchName}</h3>
+                        <h3>{formatBatchName(batchName)}</h3>
                         <p>
                           {count} {count === 1 ? "Alumnus" : "Alumni"}
                         </p>
@@ -1833,7 +1848,7 @@ export default function App() {
                       batches.map(batch => (
                         <div className="pending-row" key={batch.id}>
                           <div>
-                            <strong>{batch.name}</strong>
+                            <strong>{formatBatchName(batch.name)}</strong>
                             <span>
                               {batch.is_active ? "Active" : "Inactive"}
                             </span>
@@ -1876,7 +1891,7 @@ export default function App() {
                       <div>
                         <strong>{person.full_name}</strong>
                         <span>
-                          Batch: {person.batch || "Not specified"} ·
+                          Batch: {formatBatchName(person.batch) || "Not specified"} ·
                           {" "}{person.passing_year || "N/A"}
                         </span>
                         <small>{person.phone}</small>
