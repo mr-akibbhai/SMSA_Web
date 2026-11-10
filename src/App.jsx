@@ -39,15 +39,23 @@ const emptyCommitteeForm = {
 function formatBatchName(name) {
   if (!name) return "";
 
-  const batchMatch = String(name)
-    .trim()
-    .match(/^batch[-\s]*(\d{4})$/i);
+  const value = String(name).trim();
+
+  const batchMatch = value.match(/^batch[-\s]*(\d{4})$/i);
 
   if (batchMatch) {
     return `Dakhil-${batchMatch[1]}`;
   }
 
-  return name;
+  const dakhilMatch = value.match(/^dakhil[-\s]*(\d{2}|\d{4})$/i);
+
+  if (dakhilMatch) {
+    const year = dakhilMatch[1];
+
+    return `Dakhil-${year.length === 2 ? `20${year}` : year}`;
+  }
+
+  return value;
 }
 
 export default function App() {
@@ -357,7 +365,7 @@ export default function App() {
     }
 
     const selected = batches.find(
-      batch => batch.name === form.batch && batch.is_active
+      batch => formatBatchName(batch.name) === formatBatchName(form.batch) && batch.is_active
     );
 
     if (!selected) {
@@ -393,6 +401,7 @@ export default function App() {
         .upsert({
           id: data.user.id,
           ...form,
+          batch: formatBatchName(form.batch),
           full_name: form.full_name.trim(),
           address: form.address.trim() || null,
           passing_year: Number(form.passing_year),
@@ -546,9 +555,11 @@ export default function App() {
     }
 
     const currentBatch = profile?.batch;
+
     const selected = batches.find(
-      batch => batch.name === form.batch &&
-        (batch.is_active || batch.name === currentBatch)
+      batch =>
+        formatBatchName(batch.name) === formatBatchName(form.batch) &&
+        (batch.is_active || formatBatchName(batch.name) === formatBatchName(currentBatch))
     );
 
     if (!selected) {
@@ -564,6 +575,7 @@ export default function App() {
         .upsert({
           id: session.user.id,
           ...form,
+          batch: formatBatchName(form.batch),
           full_name: form.full_name.trim(),
           address: form.address.trim() || null,
           passing_year: Number(form.passing_year),
@@ -575,6 +587,10 @@ export default function App() {
       if (error) throw error;
 
       setProfile(data);
+      setForm(old => ({
+        ...old,
+        batch: formatBatchName(data.batch)
+      }));
       setMessage("Profile saved successfully.");
       await loadPublicData();
     } catch (error) {
@@ -600,9 +616,12 @@ export default function App() {
       return;
     }
 
-    const batchName = `Dakhil-${String(year).padStart(2, "0")}`;
+    const fullYear = 2000 + year;
+    const batchName = `Dakhil-${fullYear}`;
 
-    if (batches.some(batch => batch.name.toLowerCase() === batchName.toLowerCase())) {
+    if (batches.some(
+      batch => formatBatchName(batch.name).toLowerCase() === batchName.toLowerCase()
+    )) {
       setMessage(`${batchName} already exists.`);
       return;
     }
@@ -642,8 +661,8 @@ export default function App() {
     const nextStatus = !batch.is_active;
 
     const confirmText = nextStatus
-      ? `Activate ${batch.name}?`
-      : `Deactivate ${batch.name}? New members will no longer be able to select it.`;
+      ? `Activate ${formatBatchName(batch.name)}?`
+      : `Deactivate ${formatBatchName(batch.name)}? New members will no longer be able to select it.`;
 
     if (!window.confirm(confirmText)) return;
 
@@ -656,7 +675,7 @@ export default function App() {
       if (error) throw error;
 
       setMessage(
-        `${batch.name} ${nextStatus ? "activated" : "deactivated"} successfully.`
+        `${formatBatchName(batch.name)} ${nextStatus ? "activated" : "deactivated"} successfully.`
       );
 
       await loadBatches();
@@ -684,7 +703,7 @@ export default function App() {
           full_name: editingMember.full_name,
           address: editingMember.address || null,
           passing_year: Number(editingMember.passing_year),
-          batch: editingMember.batch,
+          batch: formatBatchName(editingMember.batch),
           phone: editingMember.phone,
           blood_group: editingMember.blood_group,
           bio: editingMember.bio
@@ -877,43 +896,42 @@ export default function App() {
     setMessage("");
   }
 
-  // BATCH NAMES: DAKHIL-06 TO CURRENT YEAR
+  // BATCH NAMES: DAKHIL-2006 TO CURRENT YEAR
   const currentYear = new Date().getFullYear();
-  const currentShortYear = Number(String(currentYear).slice(-2));
 
   const generatedBatchNames = Array.from(
-    { length: Math.max(0, currentShortYear - 5) },
-    (_, index) => `Dakhil-${String(index + 6).padStart(2, "0")}`
+    { length: Math.max(0, currentYear - 2005) },
+    (_, index) => `Dakhil-${2006 + index}`
   );
 
   const alumniBatchNames = alumni
-    .map(person => person.batch)
+    .map(person => formatBatchName(person.batch))
     .filter(Boolean);
 
   const displayedBatchNames = [
     ...new Set([
       ...generatedBatchNames,
-      ...batches.map(batch => batch.name),
+      ...batches.map(batch => formatBatchName(batch.name)),
       ...alumniBatchNames
     ])
   ].sort((a, b) => {
-    const yearA = Number(a.match(/\d{2}$/)?.[0] || 0);
-    const yearB = Number(b.match(/\d{2}$/)?.[0] || 0);
+    const yearA = Number(a.match(/\d{4}$/)?.[0] || 0);
+    const yearB = Number(b.match(/\d{4}$/)?.[0] || 0);
     return yearA - yearB;
   });
 
   const filteredBatchNames = displayedBatchNames.filter(name =>
-    formatBatchName(name).toLowerCase().includes(search.toLowerCase())
+    name.toLowerCase().includes(search.toLowerCase())
   );
 
   const filteredAlumni = alumni.filter(person =>
-    `${person.full_name || ""} ${formatBatchName(person.batch) || ""} ${person.passing_year || ""}`
+    `${person.full_name || ""} ${formatBatchName(person.batch)} ${person.passing_year || ""}`
       .toLowerCase()
       .includes(search.toLowerCase())
   );
 
   const selectedBatchAlumni = filteredAlumni.filter(
-    person => person.batch === selectedBatch
+    person => formatBatchName(person.batch) === formatBatchName(selectedBatch)
   );
 
   // BATCH SELECT FIELD
@@ -923,19 +941,31 @@ export default function App() {
     includeInactive = false,
     required = false
   }) {
-    const options = batches.filter(batch =>
-      batch.is_active || (includeInactive && batch.name === value)
+    const options = Array.from(
+      new Map(
+        batches
+          .filter(batch =>
+            batch.is_active ||
+            (includeInactive &&
+              formatBatchName(batch.name) === formatBatchName(value))
+          )
+          .sort((a, b) => Number(b.is_active) - Number(a.is_active))
+          .map(batch => [formatBatchName(batch.name), batch])
+      ).values()
     );
 
     return (
       <select
-        value={value || ""}
+        value={formatBatchName(value) || ""}
         required={required}
         onChange={e => onChange(e.target.value)}
       >
         <option value="">Select Batch</option>
         {options.map(batch => (
-          <option key={batch.id} value={batch.name}>
+          <option
+            key={batch.id}
+            value={formatBatchName(batch.name)}
+          >
             {formatBatchName(batch.name)}{!batch.is_active ? " (Inactive)" : ""}
           </option>
         ))}
@@ -1175,7 +1205,7 @@ export default function App() {
 
                     <p>
                       Enter the last two digits of the year. Example: 27
-                      will create Dakhil-27.
+                      will create Dakhil-2027.
                     </p>
 
                     <form onSubmit={createBatch}>
@@ -1270,7 +1300,8 @@ export default function App() {
                 ) : (
                   filteredBatchNames.map(batchName => {
                     const count = alumni.filter(
-                      person => person.batch === batchName
+                      person =>
+                        formatBatchName(person.batch) === formatBatchName(batchName)
                     ).length;
 
                     return (
@@ -1813,7 +1844,7 @@ export default function App() {
 
                   <p>
                     Enter the last two digits of the year to create a batch.
-                    Example: 27 creates Dakhil-27.
+                    Example: 27 creates Dakhil-2027.
                   </p>
 
                   <form onSubmit={createBatch}>
@@ -1845,7 +1876,14 @@ export default function App() {
                     ) : batches.length === 0 ? (
                       <p className="empty-state">No batches found.</p>
                     ) : (
-                      batches.map(batch => (
+                      Array.from(
+                        new Map(
+                          batches.map(batch => [
+                            formatBatchName(batch.name),
+                            batch
+                          ])
+                        ).values()
+                      ).map(batch => (
                         <div className="pending-row" key={batch.id}>
                           <div>
                             <strong>{formatBatchName(batch.name)}</strong>
@@ -1900,7 +1938,10 @@ export default function App() {
                       <div className="pending-actions">
                         <button
                           className="approve-btn"
-                          onClick={() => setEditingMember({ ...person })}
+                          onClick={() => setEditingMember({
+                            ...person,
+                            batch: formatBatchName(person.batch)
+                          })}
                         >
                           <Edit size={14} /> Edit
                         </button>
