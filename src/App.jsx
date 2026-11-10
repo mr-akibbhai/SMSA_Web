@@ -4,11 +4,12 @@ import {
   Menu, X, Users, GraduationCap, CalendarDays, ShieldCheck,
   LogIn, LogOut, UserCircle, ArrowRight, Heart,
   Search, Clock, MapPin, KeyRound, Trash2, Edit,
-  Plus, Save, Ban, RefreshCw, ChevronLeft, Layers
+  Plus, Save, Ban, RefreshCw, ChevronLeft, Layers,
+  Image, Upload, CheckCircle, XCircle
 } from "lucide-react";
 import { supabase } from "./lib/supabase";
 
-const navItems = ["Home", "About", "Alumni", "Events", "Committee"];
+const navItems = ["Home", "About", "Alumni", "Gallery", "Events", "Committee"];
 
 const emptyForm = {
   full_name: "",
@@ -51,7 +52,6 @@ function formatBatchName(name) {
 
   if (dakhilMatch) {
     const year = dakhilMatch[1];
-
     return `Dakhil-${year.length === 2 ? `20${year}` : year}`;
   }
 
@@ -86,6 +86,15 @@ export default function App() {
   const [selectedBatch, setSelectedBatch] = useState(null);
   const [batchLoading, setBatchLoading] = useState(false);
   const [showBatchForm, setShowBatchForm] = useState(false);
+
+  // BATCH GALLERY
+  const [galleryBatch, setGalleryBatch] = useState(null);
+  const [galleryPhotos, setGalleryPhotos] = useState([]);
+  const [pendingGallery, setPendingGallery] = useState([]);
+  const [galleryLoading, setGalleryLoading] = useState(false);
+  const [galleryUploading, setGalleryUploading] = useState(false);
+  const [galleryFile, setGalleryFile] = useState(null);
+  const [galleryCaption, setGalleryCaption] = useState("");
 
   const [form, setForm] = useState(emptyForm);
   const [editingMember, setEditingMember] = useState(null);
@@ -151,6 +160,8 @@ export default function App() {
           setProfile(null);
           setIsAdmin(false);
           setMembers([]);
+          setPendingGallery([]);
+          setGalleryPhotos([]);
           setPage("Home");
           setLoading(false);
         }
@@ -200,6 +211,236 @@ export default function App() {
     }
   }
 
+  // CREATE SIGNED URLS FOR PRIVATE GALLERY IMAGES
+  async function addGalleryImageUrls(photos) {
+    return Promise.all(
+      (photos || []).map(async photo => {
+        const { data, error } = await supabase.storage
+          .from("batch-gallery")
+          .createSignedUrl(photo.storage_path, 3600);
+
+        return {
+          ...photo,
+          image_url: error ? null : data?.signedUrl || null
+        };
+      })
+    );
+  }
+
+  // LOAD GALLERY PHOTOS
+  async function loadGalleryPhotos(batchId) {
+    if (!supabase || !batchId) return;
+
+    setGalleryLoading(true);
+
+    try {
+      const { data, error } = await supabase
+        .from("gallery_photos")
+        .select("*")
+        .eq("batch_id", batchId)
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+
+      const photos = await addGalleryImageUrls(data || []);
+      setGalleryPhotos(photos);
+    } catch (error) {
+      setMessage("Gallery loading failed: " + error.message);
+    } finally {
+      setGalleryLoading(false);
+    }
+  }
+
+  // LOAD PENDING PHOTOS FOR ADMIN
+  async function loadPendingGallery(adminAccess = isAdmin) {
+    if (!supabase || !adminAccess) return;
+
+    try {
+      const { data, error } = await supabase
+        .from("gallery_photos")
+        .select("*")
+        .eq("status", "pending")
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+
+      const photos = await addGalleryImageUrls(data || []);
+      setPendingGallery(photos);
+    } catch (error) {
+      setMessage("Pending gallery loading failed: " + error.message);
+    }
+  }
+
+  // UPLOAD GALLERY PHOTO
+  async function uploadGalleryPhoto(e) {
+    e.preventDefault();
+
+    if (!session || !profile) {
+      setMessage("Please login first.");
+      return;
+    }
+
+    if (!galleryBatch || !galleryFile) {
+      setMessage("Please select a photo.");
+      return;
+    }
+
+    const ownBatch = batches.find(
+      batch =>
+        formatBatchName(batch.name) === formatBatchName(profile.batch) &&
+        batch.is_active
+    );
+
+    if (!ownBatch || Number(ownBatch.id) !== Number(galleryBatch.id)) {
+      setMessage("You can upload photos only to your own active batch.");
+      return;
+    }
+
+    if (!galleryFile.type.startsWith("image/")) {
+      setMessage("Only image files are allowed.");
+      return;
+    }
+
+    if (galleryFile.size > 10 * 1024 * 1024) {
+      setMessage("Maximum image size is 10 MB.");
+      return;
+    }
+
+    setGalleryUploading(true);
+    setMessage("");
+
+    let storagePath = null;
+
+    try {
+      const { count, error: countError } = await supabase
+        .from("gallery_photos")
+        .select("id", { count: "exact", head: true })
+        .eq("batch_id", galleryBatch.id)
+        .eq("status", "approved");
+
+      if (countError) throw countError;
+
+      if ((count || 0) >= 100) {
+        throw new Error("This batch has reached its 100 approved-photo limit.");
+      }
+
+      const safeFileName = galleryFile.name.replace(
+        /[^a-zA-Z0-9._-]/g,
+        "_"
+      );
+
+      storagePath =
+        `${galleryBatch.id}/${session.user.id}/${crypto.randomUUID()}-${safeFileName}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from("batch-gallery")
+        .upload(storagePath, galleryFile, {
+          contentType: galleryFile.type,
+          upsert: false
+        });
+
+      if (uploadError) throw uploadError;
+
+      const { error: insertError } = await supabase
+        .from("gallery_photos")
+        .insert({
+          batch_id: galleryBatch.id,
+          uploader_id: session.user.id,
+          storage_path: storagePath,
+          caption: galleryCaption.trim() || null,
+          status: "pending"
+        });
+
+      if (insertError) {
+        await supabase.storage
+          .from("batch-gallery")
+          .remove([storagePath]);
+
+        throw insertError;
+      }
+
+      setGalleryFile(null);
+      setGalleryCaption("");
+
+      const fileInput = document.getElementById("gallery-file-input");
+      if (fileInput) fileInput.value = "";
+
+      setMessage("Photo submitted successfully. Waiting for Admin approval.");
+
+      await loadGalleryPhotos(galleryBatch.id);
+    } catch (error) {
+      setMessage("Photo upload failed: " + error.message);
+    } finally {
+      setGalleryUploading(false);
+    }
+  }
+
+  // ADMIN APPROVE / REJECT PHOTO
+  async function reviewGalleryPhoto(photoId, status) {
+    if (!isAdmin || !session) return;
+
+    try {
+      const { error } = await supabase
+        .from("gallery_photos")
+        .update({
+          status,
+          reviewed_at: new Date().toISOString(),
+          reviewed_by: session.user.id
+        })
+        .eq("id", photoId);
+
+      if (error) throw error;
+
+      setMessage(
+        status === "approved"
+          ? "Photo approved successfully."
+          : "Photo rejected successfully."
+      );
+
+      await Promise.all([
+        loadPendingGallery(true),
+        galleryBatch
+          ? loadGalleryPhotos(galleryBatch.id)
+          : Promise.resolve()
+      ]);
+    } catch (error) {
+      setMessage("Photo review failed: " + error.message);
+    }
+  }
+
+  // ADMIN DELETE PHOTO
+  async function deleteGalleryPhoto(photo) {
+    if (!isAdmin) return;
+
+    if (!window.confirm("Permanently delete this photo?")) return;
+
+    try {
+      const { error: storageError } = await supabase.storage
+        .from("batch-gallery")
+        .remove([photo.storage_path]);
+
+      if (storageError) throw storageError;
+
+      const { error } = await supabase
+        .from("gallery_photos")
+        .delete()
+        .eq("id", photo.id);
+
+      if (error) throw error;
+
+      setMessage("Photo deleted successfully.");
+
+      await Promise.all([
+        loadPendingGallery(true),
+        galleryBatch
+          ? loadGalleryPhotos(galleryBatch.id)
+          : Promise.resolve()
+      ]);
+    } catch (error) {
+      setMessage("Photo deletion failed: " + error.message);
+    }
+  }
+
   // LOAD ACCOUNT
   async function loadAccount(user) {
     if (!supabase || !user) return;
@@ -244,9 +485,14 @@ export default function App() {
 
       if (admin) {
         setPage("Admin");
-        await Promise.all([loadAdminData(), loadBatches()]);
+        await Promise.all([
+          loadAdminData(),
+          loadBatches(),
+          loadPendingGallery(true)
+        ]);
       } else {
         setPage("Profile");
+        setPendingGallery([]);
       }
 
       setMessage("");
@@ -292,6 +538,15 @@ export default function App() {
     setSelectedBatch(null);
     setSearch("");
     setShowBatchForm(false);
+
+    if (name === "Gallery") {
+      setGalleryBatch(null);
+      setGalleryPhotos([]);
+    }
+
+    if (name === "Admin" && isAdmin) {
+      loadPendingGallery(true);
+    }
   }
 
   function openLoginOptions() {
@@ -365,7 +620,9 @@ export default function App() {
     }
 
     const selected = batches.find(
-      batch => formatBatchName(batch.name) === formatBatchName(form.batch) && batch.is_active
+      batch =>
+        formatBatchName(batch.name) === formatBatchName(form.batch) &&
+        batch.is_active
     );
 
     if (!selected) {
@@ -559,7 +816,8 @@ export default function App() {
     const selected = batches.find(
       batch =>
         formatBatchName(batch.name) === formatBatchName(form.batch) &&
-        (batch.is_active || formatBatchName(batch.name) === formatBatchName(currentBatch))
+        (batch.is_active ||
+          formatBatchName(batch.name) === formatBatchName(currentBatch))
     );
 
     if (!selected) {
@@ -885,6 +1143,8 @@ export default function App() {
     setProfile(null);
     setIsAdmin(false);
     setMembers([]);
+    setPendingGallery([]);
+    setGalleryPhotos([]);
     setForm(emptyForm);
     setPassword("");
     setConfirmPassword("");
@@ -892,6 +1152,7 @@ export default function App() {
     setLoginType("member");
     setAuthMode("choose");
     setSelectedBatch(null);
+    setGalleryBatch(null);
     setPage("Home");
     setMessage("");
   }
@@ -1335,6 +1596,232 @@ export default function App() {
                   <p className="empty-state">No batches found.</p>
                 )}
               </div>
+            )}
+          </section>
+        )}
+
+        {/* BATCH GALLERY */}
+        {page === "Gallery" && (
+          <section className="page-section container">
+            <PageHeading
+              label="MEMORIES TOGETHER"
+              title={galleryBatch
+                ? `${formatBatchName(galleryBatch.name)} Gallery`
+                : "Batch Gallery"}
+            />
+
+            {!galleryBatch ? (
+              <>
+                <p className="gallery-intro">
+                  Explore memories shared by our alumni, batch by batch.
+                </p>
+
+                {batchLoading ? (
+                  <p className="empty-state">Loading batches...</p>
+                ) : (
+                  <div className="batch-grid">
+                    {batches
+                      .filter(batch => batch.is_active)
+                      .map(batch => (
+                        <button
+                          type="button"
+                          className="batch-card"
+                          key={batch.id}
+                          onClick={() => {
+                            setGalleryBatch(batch);
+                            setGalleryPhotos([]);
+                            loadGalleryPhotos(batch.id);
+                          }}
+                        >
+                          <div className="batch-card-icon">
+                            <Image size={30} />
+                          </div>
+
+                          <h3>{formatBatchName(batch.name)}</h3>
+                          <p>Batch memories</p>
+
+                          <span>
+                            Open Gallery <ArrowRight size={16} />
+                          </span>
+                        </button>
+                      ))}
+
+                    {batches.filter(batch => batch.is_active).length === 0 && (
+                      <p className="empty-state">No active batches found.</p>
+                    )}
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className="btn-outline"
+                  style={{ marginBottom: 24 }}
+                  onClick={() => {
+                    setGalleryBatch(null);
+                    setGalleryPhotos([]);
+                    setGalleryFile(null);
+                    setGalleryCaption("");
+                  }}
+                >
+                  <ChevronLeft size={17} /> Back to All Batches
+                </button>
+
+                {session &&
+                  profile &&
+                  formatBatchName(profile.batch) === formatBatchName(galleryBatch.name) &&
+                  galleryBatch.is_active && (
+                    <div className="content-card gallery-upload-panel">
+                      <h3>
+                        <Upload size={21} /> Upload a Photo
+                      </h3>
+
+                      <p>
+                        Upload a memory from your batch. Your photo will appear
+                        in the public gallery after Admin approval.
+                      </p>
+
+                      <form onSubmit={uploadGalleryPhoto}>
+                        <label>Select Photo</label>
+                        <input
+                          id="gallery-file-input"
+                          type="file"
+                          accept="image/*"
+                          required
+                          onChange={e =>
+                            setGalleryFile(e.target.files?.[0] || null)
+                          }
+                        />
+
+                        <label>Caption (Optional)</label>
+                        <input
+                          type="text"
+                          value={galleryCaption}
+                          maxLength={200}
+                          placeholder="Write a caption for your photo..."
+                          onChange={e => setGalleryCaption(e.target.value)}
+                        />
+
+                        <button
+                          className="btn-primary"
+                          disabled={galleryUploading || !galleryFile}
+                        >
+                          <Upload size={17} />
+                          {galleryUploading ? "Uploading..." : "Submit Photo"}
+                        </button>
+                      </form>
+                    </div>
+                  )}
+
+                {!session && (
+                  <div className="content-card gallery-login-notice">
+                    <p>Login to upload photos from your own batch.</p>
+                    <button className="btn-primary" onClick={openLoginOptions}>
+                      <LogIn size={17} /> Login
+                    </button>
+                  </div>
+                )}
+
+                {session &&
+                  profile &&
+                  formatBatchName(profile.batch) !== formatBatchName(galleryBatch.name) && (
+                    <div className="content-card gallery-login-notice">
+                      <p>
+                        You can upload photos only to your own batch:
+                        {" "}{formatBatchName(profile.batch)}.
+                      </p>
+                    </div>
+                  )}
+
+                <div className="gallery-grid">
+                  {galleryLoading ? (
+                    <p className="empty-state">Loading photos...</p>
+                  ) : (
+                    galleryPhotos
+                      .filter(photo =>
+                        photo.status === "approved" ||
+                        photo.uploader_id === session?.user?.id ||
+                        isAdmin
+                      )
+                      .map(photo => (
+                        <article className="gallery-card" key={photo.id}>
+                          {photo.image_url ? (
+                            <img
+                              className="gallery-image"
+                              src={photo.image_url}
+                              alt={photo.caption || "Batch memory"}
+                            />
+                          ) : (
+                            <div className="gallery-image gallery-image-empty">
+                              <Image size={35} />
+                              <span>Image unavailable</span>
+                            </div>
+                          )}
+
+                          <div className="gallery-card-content">
+                            {photo.caption && <p>{photo.caption}</p>}
+
+                            {photo.status !== "approved" && (
+                              <span className={`gallery-status ${photo.status}`}>
+                                {photo.status === "pending"
+                                  ? "Waiting for approval"
+                                  : "Rejected"}
+                              </span>
+                            )}
+
+                            {isAdmin && (
+                              <div className="gallery-admin-actions">
+                                {photo.status === "pending" && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      className="approve-btn"
+                                      onClick={() =>
+                                        reviewGalleryPhoto(photo.id, "approved")
+                                      }
+                                    >
+                                      <CheckCircle size={14} /> Approve
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      className="reject-btn"
+                                      onClick={() =>
+                                        reviewGalleryPhoto(photo.id, "rejected")
+                                      }
+                                    >
+                                      <XCircle size={14} /> Reject
+                                    </button>
+                                  </>
+                                )}
+
+                                <button
+                                  type="button"
+                                  className="reject-btn"
+                                  onClick={() => deleteGalleryPhoto(photo)}
+                                >
+                                  <Trash2 size={14} /> Delete
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </article>
+                      ))
+                  )}
+
+                  {!galleryLoading &&
+                    galleryPhotos.filter(photo =>
+                      photo.status === "approved" ||
+                      photo.uploader_id === session?.user?.id ||
+                      isAdmin
+                    ).length === 0 && (
+                      <p className="empty-state">
+                        No approved photos in this batch yet.
+                      </p>
+                    )}
+                </div>
+              </>
             )}
           </section>
         )}
@@ -1915,6 +2402,105 @@ export default function App() {
                       ))
                     )}
                   </div>
+                </div>
+
+                {/* GALLERY APPROVAL */}
+                <div className="content-card" style={{ marginTop: 24 }}>
+                  <h3>
+                    <Image size={21} style={{ verticalAlign: "middle" }} />{" "}
+                    Gallery Photo Approval ({pendingGallery.length})
+                  </h3>
+
+                  <p>
+                    Review submitted photos. Approved photos will be visible
+                    to everyone in the Gallery.
+                  </p>
+
+                  <button
+                    type="button"
+                    className="btn-outline"
+                    onClick={() => loadPendingGallery(true)}
+                    style={{ marginBottom: 20 }}
+                  >
+                    <RefreshCw size={16} /> Refresh Pending Photos
+                  </button>
+
+                  {pendingGallery.length === 0 ? (
+                    <p className="empty-state">No pending photos.</p>
+                  ) : (
+                    <div className="gallery-grid">
+                      {pendingGallery.map(photo => {
+                        const uploader = members.find(
+                          member => member.id === photo.uploader_id
+                        );
+
+                        const photoBatch = batches.find(
+                          batch => Number(batch.id) === Number(photo.batch_id)
+                        );
+
+                        return (
+                          <article className="gallery-card" key={photo.id}>
+                            {photo.image_url ? (
+                              <img
+                                className="gallery-image"
+                                src={photo.image_url}
+                                alt={photo.caption || "Pending photo"}
+                              />
+                            ) : (
+                              <div className="gallery-image gallery-image-empty">
+                                <Image size={35} />
+                                <span>Image unavailable</span>
+                              </div>
+                            )}
+
+                            <div className="gallery-card-content">
+                              <strong>
+                                {uploader?.full_name || "Unknown member"}
+                              </strong>
+
+                              <span>
+                                {photoBatch
+                                  ? formatBatchName(photoBatch.name)
+                                  : `Batch ID: ${photo.batch_id}`}
+                              </span>
+
+                              <p>{photo.caption || "No caption"}</p>
+
+                              <div className="gallery-admin-actions">
+                                <button
+                                  type="button"
+                                  className="approve-btn"
+                                  onClick={() =>
+                                    reviewGalleryPhoto(photo.id, "approved")
+                                  }
+                                >
+                                  <CheckCircle size={14} /> Approve
+                                </button>
+
+                                <button
+                                  type="button"
+                                  className="reject-btn"
+                                  onClick={() =>
+                                    reviewGalleryPhoto(photo.id, "rejected")
+                                  }
+                                >
+                                  <XCircle size={14} /> Reject
+                                </button>
+
+                                <button
+                                  type="button"
+                                  className="reject-btn"
+                                  onClick={() => deleteGalleryPhoto(photo)}
+                                >
+                                  <Trash2 size={14} /> Delete
+                                </button>
+                              </div>
+                            </div>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
 
                 {/* MEMBER MANAGEMENT */}
