@@ -1,12 +1,24 @@
+
 import { useEffect, useState } from "react";
 import {
   Menu, X, Users, GraduationCap, CalendarDays, ShieldCheck,
   LogIn, LogOut, UserCircle, ArrowRight, Mail, Heart,
-  Search, Clock, MapPin, Lock, KeyRound
+  Search, Clock, MapPin, Lock, KeyRound, Trash2, Edit,
+  Plus, Save, Ban, RefreshCw
 } from "lucide-react";
 import { supabase } from "./lib/supabase";
 
 const navItems = ["Home", "About", "Alumni", "Events", "Committee"];
+
+const emptyForm = {
+  full_name: "",
+  address: "",
+  passing_year: "",
+  batch: "",
+  phone: "",
+  blood_group: "",
+  bio: ""
+};
 
 export default function App() {
   const [page, setPage] = useState("Home");
@@ -17,33 +29,32 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
 
-  const [accountType, setAccountType] = useState(
-    () => localStorage.getItem("smsa_account_type") || "member"
-  );
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [authMode, setAuthMode] = useState("login");
-  const [magicLinkSent, setMagicLinkSent] = useState(false);
   const [authLoading, setAuthLoading] = useState(false);
 
   const [search, setSearch] = useState("");
   const [alumni, setAlumni] = useState([]);
   const [events, setEvents] = useState([]);
   const [committee, setCommittee] = useState([]);
-  const [pending, setPending] = useState([]);
-  const [adminRequests, setAdminRequests] = useState([]);
+  const [members, setMembers] = useState([]);
 
-  const [form, setForm] = useState({
-    full_name: "",
-    passing_year: "",
-    batch: "",
-    phone: "",
-    blood_group: "",
-    bio: ""
+  const [form, setForm] = useState(emptyForm);
+  const [editingMember, setEditingMember] = useState(null);
+  const [editingEvent, setEditingEvent] = useState(null);
+  const [editingCommittee, setEditingCommittee] = useState(null);
+
+  const [eventForm, setEventForm] = useState({
+    title: "", description: "", event_date: "", location: ""
   });
 
-  // AUTHENTICATION INITIALIZATION
+  const [committeeForm, setCommitteeForm] = useState({
+    name: "", position: "", batch: "", photo_url: "", display_order: 0
+  });
+
+  // AUTH INITIALIZATION
   useEffect(() => {
     if (!supabase) {
       setLoading(false);
@@ -51,257 +62,159 @@ export default function App() {
       return;
     }
 
+    let mounted = true;
+
+    async function initialize() {
+      const { data } = await supabase.auth.getSession();
+
+      if (mounted && data.session) {
+        setSession(data.session);
+        await loadAccount(data.session.user);
+      } else if (mounted) {
+        setLoading(false);
+      }
+
+      if (mounted) await loadPublicData();
+    }
+
+    initialize();
+
     const { data: listener } = supabase.auth.onAuthStateChange(
-      (event, newSession) => {
-        setSession(newSession);
+      async (event, newSession) => {
+        if (!mounted) return;
 
         if (event === "PASSWORD_RECOVERY") {
+          setSession(newSession);
           setPage("ResetPassword");
           setLoading(false);
           return;
         }
 
-        // Only the auth listener loads an account after login.
-        // This prevents duplicate loadAccount() calls.
-        if (
-          event === "INITIAL_SESSION" ||
-          event === "SIGNED_IN" ||
-          event === "TOKEN_REFRESHED"
-        ) {
-          if (newSession) {
-            setTimeout(() => {
-              loadAccount(newSession.user.id, newSession.user);
-            }, 0);
-          } else {
-            setLoading(false);
-          }
+        if (event === "SIGNED_IN" && newSession) {
+          setSession(newSession);
+          setTimeout(() => {
+            if (mounted) loadAccount(newSession.user);
+          }, 0);
         }
 
         if (event === "SIGNED_OUT") {
           setSession(null);
           setProfile(null);
           setIsAdmin(false);
-          setPending([]);
-          setAdminRequests([]);
+          setMembers([]);
+          setPage("Home");
           setLoading(false);
         }
       }
     );
 
-    loadPublicData();
-
-    return () => listener.subscription.unsubscribe();
+    return () => {
+      mounted = false;
+      listener.subscription.unsubscribe();
+    };
   }, []);
 
-  // LOAD PUBLIC WEBSITE DATA
+  // PUBLIC DATA
   async function loadPublicData() {
     if (!supabase) return;
 
-    const [alumniResult, eventResult, committeeResult] = await Promise.all([
+    const [a, e, c] = await Promise.all([
       supabase.from("public_alumni").select("*"),
-      supabase.from("events").select("*").order("event_date", { ascending: true }),
+      supabase.from("events").select("*").order("event_date"),
       supabase.from("committee_members").select("*").order("display_order")
     ]);
 
-    if (!alumniResult.error) setAlumni(alumniResult.data || []);
-    if (!eventResult.error) setEvents(eventResult.data || []);
-    if (!committeeResult.error) setCommittee(committeeResult.data || []);
+    if (!a.error) setAlumni(a.data || []);
+    if (!e.error) setEvents(e.data || []);
+    if (!c.error) setCommittee(c.data || []);
   }
 
-  // LOAD ACCOUNT AND VERIFY ROLE
-  async function loadAccount(userId, authUser = null) {
-    if (!supabase || !userId) return;
+  // LOAD ACCOUNT AND DATABASE ROLE
+  async function loadAccount(user) {
+    if (!supabase || !user) return;
 
     setLoading(true);
 
     try {
-      const [profileResult, roleResult] = await Promise.all([
-        supabase
-          .from("profiles")
-          .select("*")
-          .eq("id", userId)
-          .maybeSingle(),
-
-        supabase
-          .from("user_roles")
-          .select("user_id, role")
-          .eq("user_id", userId)
-          .maybeSingle()
+      const [p, r] = await Promise.all([
+        supabase.from("profiles").select("*").eq("id", user.id).maybeSingle(),
+        supabase.from("user_roles").select("role").eq("user_id", user.id).maybeSingle()
       ]);
 
-      console.log("Account User ID:", userId);
-      console.log("Account Role Data:", roleResult.data);
-      console.log("Account Role Error:", roleResult.error);
+      if (p.error) throw p.error;
+      if (r.error) throw r.error;
 
-      if (roleResult.error) {
-        setMessage("Could not verify account role: " + roleResult.error.message);
-        return;
-      }
-
-      if (profileResult.error) {
-        setMessage("Could not load profile: " + profileResult.error.message);
-        return;
-      }
-
-      const currentProfile = profileResult.data;
-      const admin = roleResult.data?.role === "admin";
-      const selectedType =
-        localStorage.getItem("smsa_account_type") || "member";
-
-      setProfile(currentProfile || null);
+      const admin = r.data?.role === "admin";
       setIsAdmin(admin);
+      setProfile(p.data || null);
 
-      if (currentProfile) {
+      if (p.data) {
         setForm({
-          full_name: currentProfile.full_name || "",
-          passing_year: currentProfile.passing_year || "",
-          batch: currentProfile.batch || "",
-          phone: currentProfile.phone || "",
-          blood_group: currentProfile.blood_group || "",
-          bio: currentProfile.bio || ""
+          ...emptyForm,
+          ...p.data,
+          passing_year: p.data.passing_year || ""
+        });
+      } else {
+        setForm({
+          ...emptyForm,
+          full_name: user.user_metadata?.full_name || ""
         });
       }
 
-      // Admin role has priority over password metadata.
       if (admin) {
-        const [memberResult, requestResult] = await Promise.all([
-          supabase
-            .from("profiles")
-            .select("*")
-            .eq("approval_status", "pending")
-            .order("created_at", { ascending: false }),
-
-          supabase
-            .from("admin_requests")
-            .select("*")
-            .eq("status", "pending")
-            .order("created_at", { ascending: false })
-        ]);
-
-        if (memberResult.error) {
-          setMessage("Could not load pending members: " + memberResult.error.message);
-        }
-
-        if (requestResult.error) {
-          setMessage("Could not load Admin requests: " + requestResult.error.message);
-        }
-
-        setPending(memberResult.data || []);
-        setAdminRequests(requestResult.data || []);
         setPage("Admin");
-        setMessage("");
-        return;
-      }
-
-      // Non-admin account
-      if (!authUser?.user_metadata?.smsa_password_set) {
-        setPage("SetPassword");
-      } else if (selectedType === "admin") {
-        setPage("AdminPending");
-        setMessage(
-          "This account is not authorised for Admin access. Please wait for Admin approval."
-        );
+        await loadAdminData();
       } else {
         setPage("Profile");
       }
+
+      setMessage("");
     } catch (error) {
-      console.error("Load account error:", error);
       setMessage("Account loading error: " + error.message);
     } finally {
       setLoading(false);
     }
   }
 
-  // CHOOSE MEMBER OR ADMIN PORTAL
-  function chooseAccountType(type) {
-    setAccountType(type);
-    localStorage.setItem("smsa_account_type", type);
-    setAuthMode("login");
-    setMagicLinkSent(false);
-    setMessage("");
-    setPassword("");
-    setConfirmPassword("");
-    setPage("Login");
-  }
+  async function loadAdminData() {
+    if (!isAdmin && !session) return;
 
-  function openPortal() {
-    setMessage("");
-    setPage("Portal");
-  }
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("*")
+      .order("created_at", { ascending: false });
 
-  // REGISTRATION: SEND VERIFICATION LINK
-  async function sendMagicLink(e) {
-    e.preventDefault();
-    setMessage("");
-
-    if (!supabase) return;
-
-    setAuthLoading(true);
-
-    try {
-      const { error } = await supabase.auth.signInWithOtp({
-        email: email.trim(),
-        options: {
-          shouldCreateUser: true,
-          emailRedirectTo: window.location.origin
-        }
-      });
-
-      if (error) {
-        setMessage(error.message);
-      } else {
-        setMagicLinkSent(true);
-        setMessage("Verification link sent. Please check your email.");
-      }
-    } catch (error) {
-      setMessage(error.message);
-    } finally {
-      setAuthLoading(false);
-    }
-  }
-
-  // LOGIN WITH EMAIL AND PASSWORD
-  async function loginWithPassword(e) {
-    e.preventDefault();
-    setMessage("");
-
-    if (!supabase) {
-      setMessage("Supabase configuration is missing.");
+    if (error) {
+      setMessage("Could not load members: " + error.message);
       return;
     }
 
-    setAuthLoading(true);
-
-    try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
-        password
-      });
-
-      if (error) {
-        setMessage("Login failed: " + error.message);
-        return;
-      }
-
-      if (!data.user || !data.session) {
-        setMessage("Login failed: Authentication session was not created.");
-        return;
-      }
-
-      // SIGNED_IN event in the auth listener will load the account
-      // and verify the Admin role. Do not call loadAccount() again here.
-      setSession(data.session);
-      setMessage("Login successful. Verifying your account...");
-    } catch (error) {
-      console.error("Login error:", error);
-      setMessage("Login error: " + error.message);
-    } finally {
-      setAuthLoading(false);
-    }
+    setMembers(data || []);
   }
 
-  // SET PASSWORD AFTER EMAIL VERIFICATION
-  async function saveNewPassword(e) {
+  // NAVIGATION
+  function navigate(name) {
+    if (name === "Admin" && !isAdmin) {
+      setMessage("Admin access required.");
+      return;
+    }
+
+    if (name === "Profile" && !session) {
+      setPage("Login");
+      return;
+    }
+
+    setPage(name);
+    setMenuOpen(false);
+    setMessage("");
+  }
+
+  function updateForm(field, value) {
+    setForm(old => ({ ...old, [field]: value }));
+  }
+
+  // MEMBER REGISTRATION
+  async function registerMember(e) {
     e.preventDefault();
     setMessage("");
 
@@ -315,63 +228,79 @@ export default function App() {
       return;
     }
 
-    if (!supabase) return;
+    if (!form.full_name.trim() || !form.passing_year) {
+      setMessage("Full Name and Passing Year are required.");
+      return;
+    }
 
     setAuthLoading(true);
 
     try {
-      const { data, error } = await supabase.auth.updateUser({
+      const { data, error } = await supabase.auth.signUp({
+        email: email.trim(),
         password,
-        data: { smsa_password_set: true }
-      });
-
-      if (error) {
-        setMessage(error.message);
-        return;
-      }
-
-      const currentUser = data.user;
-
-      if (accountType === "admin") {
-        const { data: existingRequest, error: checkError } = await supabase
-          .from("admin_requests")
-          .select("user_id")
-          .eq("user_id", currentUser.id)
-          .maybeSingle();
-
-        if (checkError) {
-          setMessage(checkError.message);
-          return;
-        }
-
-        if (!existingRequest) {
-          const { error: requestError } = await supabase
-            .from("admin_requests")
-            .insert({
-              user_id: currentUser.id,
-              email: currentUser.email,
-              status: "pending"
-            });
-
-          if (requestError) {
-            setMessage(requestError.message);
-            return;
+        options: {
+          data: {
+            full_name: form.full_name.trim()
           }
         }
+      });
 
-        setPassword("");
-        setConfirmPassword("");
-        setPage("AdminPending");
-        setMessage("Admin application submitted. Please wait for authorisation.");
+      if (error) throw error;
+
+      if (!data.user) throw new Error("Registration failed.");
+
+      if (!data.session) {
+        setMessage(
+          "Account created. Please check your Supabase Email Confirmation setting. It must be OFF for direct login."
+        );
         return;
       }
+
+      const { error: profileError } = await supabase
+        .from("profiles")
+        .upsert({
+          id: data.user.id,
+          ...form,
+          full_name: form.full_name.trim(),
+          address: form.address.trim() || null,
+          passing_year: Number(form.passing_year),
+          approval_status: "approved"
+        });
+
+      if (profileError) throw profileError;
 
       setPassword("");
       setConfirmPassword("");
-      setMessage("Password saved successfully. Now complete your profile.");
-      await loadAccount(currentUser.id, currentUser);
+      setSession(data.session);
+      await loadAccount(data.user);
+      setMessage("Registration successful.");
     } catch (error) {
-      setMessage("Password update error: " + error.message);
+      setMessage("Registration error: " + error.message);
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  // LOGIN
+  async function login(e) {
+    e.preventDefault();
+    setMessage("");
+    setAuthLoading(true);
+
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password
+      });
+
+      if (error) throw error;
+
+      setSession(data.session);
+      await loadAccount(data.user);
+      setMessage("Login successful.");
+    } catch (error) {
+      setMessage("Login failed: " + error.message);
     } finally {
       setAuthLoading(false);
     }
@@ -381,9 +310,6 @@ export default function App() {
   async function sendPasswordReset(e) {
     e.preventDefault();
     setMessage("");
-
-    if (!supabase) return;
-
     setAuthLoading(true);
 
     try {
@@ -392,10 +318,45 @@ export default function App() {
         { redirectTo: window.location.origin }
       );
 
-      if (error) {
-        setMessage(error.message);
+      if (error) throw error;
+
+      setMessage("Password reset link sent. Check your email.");
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  // UPDATE PASSWORD
+  async function updatePassword(e) {
+    e.preventDefault();
+    setMessage("");
+
+    if (password.length < 6) {
+      setMessage("Password must contain at least 6 characters.");
+      return;
+    }
+
+    if (password !== confirmPassword) {
+      setMessage("Passwords do not match.");
+      return;
+    }
+
+    setAuthLoading(true);
+
+    try {
+      const { error } = await supabase.auth.updateUser({ password });
+      if (error) throw error;
+
+      setPassword("");
+      setConfirmPassword("");
+      setMessage("Password updated successfully.");
+
+      if (session) {
+        await loadAccount(session.user);
       } else {
-        setMessage("Password reset link sent. Please check your email.");
+        setPage("Login");
       }
     } catch (error) {
       setMessage(error.message);
@@ -404,132 +365,233 @@ export default function App() {
     }
   }
 
-  // SAVE MEMBER PROFILE
+  // SAVE OWN PROFILE
   async function saveProfile(e) {
     e.preventDefault();
 
-    if (!supabase || !session) return;
+    if (!session) return;
 
     if (!form.full_name.trim() || !form.passing_year) {
-      setMessage("Please enter your full name and passing year.");
+      setMessage("Full Name and Passing Year are required.");
       return;
     }
 
-    setMessage("Saving your profile...");
+    setAuthLoading(true);
 
-    const { error } = await supabase.from("profiles").upsert({
-      id: session.user.id,
-      ...form,
-      full_name: form.full_name.trim(),
-      passing_year: Number(form.passing_year),
-      approval_status: profile?.approval_status || "pending"
-    });
+    try {
+      const { data, error } = await supabase
+        .from("profiles")
+        .upsert({
+          id: session.user.id,
+          ...form,
+          full_name: form.full_name.trim(),
+          address: form.address.trim() || null,
+          passing_year: Number(form.passing_year),
+          approval_status: "approved"
+        })
+        .select()
+        .single();
 
-    if (error) {
-      setMessage(error.message);
-    } else {
-      setMessage("Profile submitted. Please wait for admin approval.");
-      await loadAccount(session.user.id, session.user);
+      if (error) throw error;
+
+      setProfile(data);
+      setMessage("Profile saved successfully.");
+      await loadPublicData();
+    } catch (error) {
+      setMessage("Profile save failed: " + error.message);
+    } finally {
+      setAuthLoading(false);
     }
   }
 
-  // APPROVE OR REJECT A MEMBER
-  async function updateApproval(userId, status) {
-    if (!supabase || !isAdmin) return;
+  // ADMIN: EDIT MEMBER
+  async function adminUpdateMember(e) {
+    e.preventDefault();
+    if (!isAdmin || !editingMember) return;
+
+    setAuthLoading(true);
+
+    try {
+      const { error } = await supabase
+        .from("profiles")
+        .update({
+          full_name: editingMember.full_name,
+          address: editingMember.address || null,
+          passing_year: Number(editingMember.passing_year),
+          batch: editingMember.batch,
+          phone: editingMember.phone,
+          blood_group: editingMember.blood_group,
+          bio: editingMember.bio
+        })
+        .eq("id", editingMember.id);
+
+      if (error) throw error;
+
+      setEditingMember(null);
+      setMessage("Member profile updated.");
+      await loadAdminData();
+      await loadPublicData();
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  // ADMIN: DELETE PROFILE DATA ONLY
+  async function deleteMemberProfile(userId) {
+    if (!isAdmin) return;
+
+    if (userId === session.user.id) {
+      setMessage("You cannot delete your own Admin profile here.");
+      return;
+    }
+
+    if (!window.confirm("Delete this member's profile data? This does not delete the Auth account.")) return;
 
     const { error } = await supabase
       .from("profiles")
-      .update({ approval_status: status })
+      .delete()
       .eq("id", userId);
 
     if (error) {
       setMessage(error.message);
     } else {
-      setPending((old) => old.filter((item) => item.id !== userId));
-      setMessage(`Member registration ${status}.`);
+      setMessage("Profile data deleted. Auth account still exists.");
+      await loadAdminData();
       await loadPublicData();
     }
   }
 
-  // APPROVE OR REJECT AN ADMIN APPLICATION
-  async function updateAdminRequest(userId, status) {
-    if (!supabase || !isAdmin) return;
+  // ADMIN: DISABLE / ENABLE / DELETE AUTH ACCOUNT VIA EDGE FUNCTION
+  async function manageAuthAccount(userId, action) {
+    if (!isAdmin) return;
 
-    if (status === "approved") {
-      const { error: roleError } = await supabase
-        .from("user_roles")
-        .upsert(
-          { user_id: userId, role: "admin" },
-          { onConflict: "user_id" }
-        );
-
-      if (roleError) {
-        setMessage("Could not assign Admin role: " + roleError.message);
-        return;
-      }
+    if (userId === session.user.id) {
+      setMessage("You cannot disable or delete your own Admin account.");
+      return;
     }
 
-    const { error } = await supabase
-      .from("admin_requests")
-      .update({ status })
-      .eq("user_id", userId);
+    const confirmText = action === "delete"
+      ? "Permanently delete this account? This action cannot be undone."
+      : action === "ban"
+        ? "Disable this member's login?"
+        : "Re-enable this member's login?";
 
-    if (error) {
-      setMessage(error.message);
-    } else {
-      setAdminRequests((old) =>
-        old.filter((item) => item.user_id !== userId)
+    if (!window.confirm(confirmText)) return;
+
+    try {
+      const { data, error } = await supabase.functions.invoke(
+        "admin-manage-user",
+        { body: { user_id: userId, action } }
       );
-      setMessage(`Admin application ${status}.`);
+
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+
+      setMessage(data?.message || "Account action completed.");
+      await loadAdminData();
+    } catch (error) {
+      setMessage(
+        "Account action failed: " + error.message +
+        ". Make sure the admin-manage-user Edge Function is deployed."
+      );
+    }
+  }
+
+  // ADMIN: EVENTS
+  async function saveEvent(e) {
+    e.preventDefault();
+    if (!isAdmin) return;
+
+    try {
+      const query = editingEvent
+        ? supabase.from("events").update(eventForm).eq("id", editingEvent)
+        : supabase.from("events").insert(eventForm);
+
+      const { error } = await query;
+      if (error) throw error;
+
+      setEventForm({ title: "", description: "", event_date: "", location: "" });
+      setEditingEvent(null);
+      setMessage("Event saved.");
+      await loadPublicData();
+    } catch (error) {
+      setMessage(error.message);
+    }
+  }
+
+  async function deleteEvent(id) {
+    if (!isAdmin || !window.confirm("Delete this event?")) return;
+
+    const { error } = await supabase.from("events").delete().eq("id", id);
+
+    if (error) setMessage(error.message);
+    else {
+      setMessage("Event deleted.");
+      await loadPublicData();
+    }
+  }
+
+  // ADMIN: COMMITTEE
+  async function saveCommittee(e) {
+    e.preventDefault();
+    if (!isAdmin) return;
+
+    try {
+      const query = editingCommittee
+        ? supabase.from("committee_members").update(committeeForm).eq("id", editingCommittee)
+        : supabase.from("committee_members").insert(committeeForm);
+
+      const { error } = await query;
+      if (error) throw error;
+
+      setCommitteeForm({
+        name: "", position: "", batch: "", photo_url: "", display_order: 0
+      });
+      setEditingCommittee(null);
+      setMessage("Committee member saved.");
+      await loadPublicData();
+    } catch (error) {
+      setMessage(error.message);
+    }
+  }
+
+  async function deleteCommittee(id) {
+    if (!isAdmin || !window.confirm("Delete this committee member?")) return;
+
+    const { error } = await supabase
+      .from("committee_members")
+      .delete()
+      .eq("id", id);
+
+    if (error) setMessage(error.message);
+    else {
+      setMessage("Committee member deleted.");
+      await loadPublicData();
     }
   }
 
   // LOGOUT
   async function logout() {
-    if (supabase) {
-      const { error } = await supabase.auth.signOut();
+    const { error } = await supabase.auth.signOut();
 
-      if (error) {
-        setMessage("Logout error: " + error.message);
-        return;
-      }
+    if (error) {
+      setMessage(error.message);
+      return;
     }
 
-    localStorage.setItem("smsa_account_type", "member");
-    setAccountType("member");
     setSession(null);
     setProfile(null);
     setIsAdmin(false);
+    setForm(emptyForm);
     setPassword("");
     setConfirmPassword("");
-    setMagicLinkSent(false);
-    setAuthMode("login");
-    setMessage("");
     setPage("Home");
-  }
-
-  // NAVIGATION
-  function navigate(name) {
-    if (name === "Admin" && !isAdmin) {
-      setMessage("Admin access required.");
-      return;
-    }
-
-    if (name === "Profile" && !session) {
-      setPage("Portal");
-      return;
-    }
-
-    setPage(name);
-    setMenuOpen(false);
     setMessage("");
   }
 
-  function updateForm(field, value) {
-    setForm((old) => ({ ...old, [field]: value }));
-  }
-
-  const filteredAlumni = alumni.filter((person) =>
+  const filteredAlumni = alumni.filter(person =>
     `${person.full_name} ${person.batch} ${person.passing_year}`
       .toLowerCase()
       .includes(search.toLowerCase())
@@ -552,7 +614,7 @@ export default function App() {
           </button>
 
           <nav className={menuOpen ? "nav-links open" : "nav-links"}>
-            {navItems.map((item) => (
+            {navItems.map(item => (
               <button
                 key={item}
                 className={page === item ? "nav-link active" : "nav-link"}
@@ -569,19 +631,17 @@ export default function App() {
                     <UserCircle size={16} /> My Profile
                   </button>
                 )}
-
                 {isAdmin && (
                   <button className="nav-link" onClick={() => navigate("Admin")}>
                     <ShieldCheck size={16} /> Admin Dashboard
                   </button>
                 )}
-
                 <button className="nav-login" onClick={logout}>
                   <LogOut size={16} /> Logout
                 </button>
               </>
             ) : (
-              <button className="nav-login" onClick={openPortal}>
+              <button className="nav-login" onClick={() => setPage("Login")}>
                 <LogIn size={16} /> Login / Sign Up
               </button>
             )}
@@ -608,7 +668,7 @@ export default function App() {
                   the future of our beloved institution.
                 </p>
                 <div className="hero-actions">
-                  <button className="btn-primary" onClick={openPortal}>
+                  <button className="btn-primary" onClick={() => setPage("Login")}>
                     Join Our Community <ArrowRight size={18} />
                   </button>
                   <button className="btn-outline" onClick={() => navigate("Alumni")}>
@@ -626,18 +686,15 @@ export default function App() {
 
             <section className="stats container">
               <div className="stat-card">
-                <Users size={27} />
-                <strong>{alumni.length}+</strong>
+                <Users size={27} /><strong>{alumni.length}+</strong>
                 <span>Registered Alumni</span>
               </div>
               <div className="stat-card">
-                <CalendarDays size={27} />
-                <strong>{events.length}+</strong>
+                <CalendarDays size={27} /><strong>{events.length}+</strong>
                 <span>Community Events</span>
               </div>
               <div className="stat-card">
-                <Heart size={27} />
-                <strong>One</strong>
+                <Heart size={27} /><strong>One</strong>
                 <span>United Community</span>
               </div>
             </section>
@@ -686,12 +743,12 @@ export default function App() {
               <Search size={19} />
               <input
                 value={search}
-                onChange={(e) => setSearch(e.target.value)}
+                onChange={e => setSearch(e.target.value)}
                 placeholder="Search by name, batch or passing year..."
               />
             </div>
             <div className="alumni-grid">
-              {filteredAlumni.map((person) => (
+              {filteredAlumni.map(person => (
                 <div className="alumni-card" key={person.id}>
                   <div className="avatar">
                     {person.photo_url
@@ -703,9 +760,8 @@ export default function App() {
                   <span>Passing Year: {person.passing_year || "N/A"}</span>
                 </div>
               ))}
-              {filteredAlumni.length === 0 && (
-                <p className="empty-state">No approved alumni found.</p>
-              )}
+              {filteredAlumni.length === 0 &&
+                <p className="empty-state">No alumni found.</p>}
             </div>
           </section>
         )}
@@ -714,22 +770,19 @@ export default function App() {
           <section className="page-section container">
             <PageHeading label="STAY CONNECTED" title="Events & Announcements" />
             <div className="event-grid">
-              {events.map((event) => (
+              {events.map(event => (
                 <article className="event-card" key={event.id}>
                   <div className="event-icon"><CalendarDays size={28} /></div>
                   <h3>{event.title}</h3>
                   <p>{event.description}</p>
-                  {event.event_date && (
-                    <span><Clock size={15} /> {event.event_date}</span>
-                  )}
-                  {event.location && (
-                    <span><MapPin size={15} /> {event.location}</span>
-                  )}
+                  {event.event_date &&
+                    <span><Clock size={15} /> {event.event_date}</span>}
+                  {event.location &&
+                    <span><MapPin size={15} /> {event.location}</span>}
                 </article>
               ))}
-              {events.length === 0 && (
-                <p className="empty-state">No events have been published yet.</p>
-              )}
+              {events.length === 0 &&
+                <p className="empty-state">No events have been published yet.</p>}
             </div>
           </section>
         )}
@@ -738,7 +791,7 @@ export default function App() {
           <section className="page-section container">
             <PageHeading label="LEADERSHIP" title="Our Executive Committee" />
             <div className="committee-grid">
-              {committee.map((member) => (
+              {committee.map(member => (
                 <div className="committee-card" key={member.id}>
                   <div className="avatar">
                     {member.photo_url
@@ -750,300 +803,140 @@ export default function App() {
                   <span>{member.batch || ""}</span>
                 </div>
               ))}
-              {committee.length === 0 && (
-                <p className="empty-state">Committee information will be published here.</p>
-              )}
+              {committee.length === 0 &&
+                <p className="empty-state">Committee information will be published here.</p>}
             </div>
           </section>
         )}
 
-        {/* PORTAL SELECTION */}
-        {page === "Portal" && (
-          <section className="auth-section">
-            <div className="auth-card">
-              <div className="auth-icon"><GraduationCap size={30} /></div>
-              <span className="eyebrow">SMSA ACCOUNT ACCESS</span>
-              <h2>Choose Your Portal</h2>
-              <p>Select how you want to access the SMSA platform.</p>
-
-              <button
-                className="btn-primary full-width"
-                onClick={() => chooseAccountType("member")}
-              >
-                <Users size={18} /> Member Portal
-                <ArrowRight size={17} />
-              </button>
-
-              <button
-                className="btn-outline full-width portal-admin-button"
-                onClick={() => chooseAccountType("admin")}
-              >
-                <ShieldCheck size={18} /> Admin Portal
-                <ArrowRight size={17} />
-              </button>
-
-              <div className="auth-note">
-                <Lock size={16} />
-                Admin access is restricted to authorised administrators.
-              </div>
-            </div>
-          </section>
-        )}
-
-        {/* ADMIN AND MEMBER LOGIN / REGISTRATION */}
+        {/* LOGIN AND REGISTRATION */}
         {page === "Login" && (
           <section className="auth-section">
             <div className="auth-card">
-              <div className="auth-icon">
-                {accountType === "admin"
-                  ? <ShieldCheck size={30} />
-                  : <Mail size={30} />}
-              </div>
+              <div className="auth-icon"><GraduationCap size={30} /></div>
+              <span className="eyebrow">SMSA MEMBER ACCOUNT</span>
 
-              <span className="eyebrow">
-                {accountType === "admin" ? "ADMIN PORTAL" : "MEMBER PORTAL"}
-              </span>
-
-              {authMode === "login" ? (
+              {authMode === "login" && (
                 <>
-                  <h2>{accountType === "admin" ? "Admin Login" : "Member Login"}</h2>
+                  <h2>Member Login</h2>
                   <p>Login using your registered email and password.</p>
-
-                  <form onSubmit={loginWithPassword}>
+                  <form onSubmit={login}>
                     <label>Email Address</label>
-                    <input
-                      type="email"
-                      required
+                    <input type="email" required value={email}
                       placeholder="you@example.com"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                    />
-
+                      onChange={e => setEmail(e.target.value)} />
                     <label>Password</label>
-                    <input
-                      type="password"
-                      required
+                    <input type="password" required value={password}
                       placeholder="Enter your password"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                    />
-
-                    <button
-                      className="btn-primary full-width"
-                      type="submit"
-                      disabled={authLoading}
-                    >
+                      onChange={e => setPassword(e.target.value)} />
+                    <button className="btn-primary full-width" disabled={authLoading}>
                       {authLoading ? "Please wait..." : "Login"}
                       <ArrowRight size={17} />
                     </button>
                   </form>
-
-                  <button
-                    className="text-button"
-                    type="button"
-                    onClick={() => {
-                      setMessage("");
-                      setPage("ForgotPassword");
-                    }}
-                  >
+                  <button className="text-button"
+                    onClick={() => { setAuthMode("forgot"); setMessage(""); }}>
                     Forgot Password?
                   </button>
-
                   <p className="auth-switch">
                     Don't have an account?{" "}
                     <button onClick={() => {
                       setAuthMode("signup");
                       setPassword("");
+                      setConfirmPassword("");
                       setMessage("");
-                    }}>
-                      Register Now
-                    </button>
+                    }}>Register Now</button>
                   </p>
                 </>
-              ) : (
+              )}
+
+              {authMode === "signup" && (
                 <>
-                  <h2>{magicLinkSent ? "Check Your Email" : "Create Account"}</h2>
-                  <p>
-                    {accountType === "admin"
-                      ? "Apply for an Admin account using your email address."
-                      : "Register as an SMSA member using your email address."}
+                  <h2>Create Member Account</h2>
+                  <p>Fill in your information to join SMSA.</p>
+                  <form onSubmit={registerMember}>
+                    <label>Full Name</label>
+                    <input required value={form.full_name}
+                      onChange={e => updateForm("full_name", e.target.value)} />
+
+                    <label>Address (Optional)</label>
+                    <input value={form.address}
+                      onChange={e => updateForm("address", e.target.value)}
+                      placeholder="Your address" />
+
+                    <label>Passing Year</label>
+                    <input type="number" required value={form.passing_year}
+                      onChange={e => updateForm("passing_year", e.target.value)} />
+
+                    <label>Batch</label>
+                    <input value={form.batch}
+                      onChange={e => updateForm("batch", e.target.value)} />
+
+                    <label>Phone Number</label>
+                    <input value={form.phone}
+                      onChange={e => updateForm("phone", e.target.value)} />
+
+                    <label>Blood Group</label>
+                    <select value={form.blood_group}
+                      onChange={e => updateForm("blood_group", e.target.value)}>
+                      <option value="">Select blood group</option>
+                      {["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"].map(g =>
+                        <option key={g}>{g}</option>)}
+                    </select>
+
+                    <label>Short Bio</label>
+                    <textarea value={form.bio}
+                      onChange={e => updateForm("bio", e.target.value)}
+                      placeholder="Tell us about yourself..." />
+
+                    <label>Email Address</label>
+                    <input type="email" required value={email}
+                      placeholder="you@example.com"
+                      onChange={e => setEmail(e.target.value)} />
+
+                    <label>Password</label>
+                    <input type="password" required minLength={6}
+                      value={password} placeholder="At least 6 characters"
+                      onChange={e => setPassword(e.target.value)} />
+
+                    <label>Confirm Password</label>
+                    <input type="password" required minLength={6}
+                      value={confirmPassword} placeholder="Enter password again"
+                      onChange={e => setConfirmPassword(e.target.value)} />
+
+                    <button className="btn-primary full-width" disabled={authLoading}>
+                      {authLoading ? "Creating account..." : "Register"}
+                      <ArrowRight size={17} />
+                    </button>
+                  </form>
+                  <p className="auth-switch">
+                    Already registered?{" "}
+                    <button onClick={() => setAuthMode("login")}>Login</button>
                   </p>
+                </>
+              )}
 
-                  {!magicLinkSent ? (
-                    <form onSubmit={sendMagicLink}>
-                      <label>Email Address</label>
-                      <input
-                        type="email"
-                        required
-                        placeholder="you@example.com"
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                      />
-
-                      <button
-                        className="btn-primary full-width"
-                        type="submit"
-                        disabled={authLoading}
-                      >
-                        {authLoading ? "Sending..." : "Send Verification Link"}
-                        <ArrowRight size={17} />
-                      </button>
-                    </form>
-                  ) : (
-                    <div className="auth-note">
-                      <Mail size={18} />
-                      Check your inbox and spam folder. Click the verification link to continue.
-                    </div>
-                  )}
-
-                  <button
-                    className="text-button"
-                    type="button"
-                    onClick={() => {
-                      setAuthMode("login");
-                      setMagicLinkSent(false);
-                      setMessage("");
-                    }}
-                  >
-                    Back to Login
-                  </button>
+              {authMode === "forgot" && (
+                <>
+                  <h2>Forgot Password?</h2>
+                  <p>Enter your email to receive a password reset link.</p>
+                  <form onSubmit={sendPasswordReset}>
+                    <label>Email Address</label>
+                    <input type="email" required value={email}
+                      onChange={e => setEmail(e.target.value)} />
+                    <button className="btn-primary full-width" disabled={authLoading}>
+                      {authLoading ? "Sending..." : "Send Reset Link"}
+                    </button>
+                  </form>
+                  <button className="text-button"
+                    onClick={() => setAuthMode("login")}>Back to Login</button>
                 </>
               )}
 
               <div className="auth-note">
                 <ShieldCheck size={16} />
-                {accountType === "admin"
-                  ? "Admin access requires approval by an authorised administrator."
-                  : "Your member profile will be reviewed by an SMSA administrator."}
+                Admin access is restricted to authorised accounts.
               </div>
-
-              <button
-                className="text-button"
-                type="button"
-                onClick={() => {
-                  setPage("Portal");
-                  setMessage("");
-                  setPassword("");
-                }}
-              >
-                Change Portal
-              </button>
-            </div>
-          </section>
-        )}
-
-        {/* ADMIN APPLICATION PENDING */}
-        {page === "AdminPending" && (
-          <section className="auth-section">
-            <div className="auth-card">
-              <div className="auth-icon"><ShieldCheck size={32} /></div>
-              <span className="eyebrow">ADMIN AUTHORISATION</span>
-              <h2>Application Pending</h2>
-              <p>
-                Your Admin account has been registered, but Admin access has
-                not been granted yet.
-              </p>
-              <div className="auth-note">
-                <Clock size={18} />
-                An authorised SMSA administrator must approve your application
-                before you can access the Admin Dashboard.
-              </div>
-              <button
-                className="btn-outline full-width"
-                onClick={logout}
-              >
-                Logout
-              </button>
-            </div>
-          </section>
-        )}
-
-        {/* SET PASSWORD */}
-        {page === "SetPassword" && (
-          <section className="auth-section">
-            <div className="auth-card">
-              <div className="auth-icon"><Lock size={30} /></div>
-              <span className="eyebrow">ACCOUNT SECURITY</span>
-              <h2>Set Your Password</h2>
-              <p>Your email has been verified. Create a password for future login.</p>
-
-              <form onSubmit={saveNewPassword}>
-                <label>New Password</label>
-                <input
-                  type="password"
-                  required
-                  minLength={6}
-                  placeholder="At least 6 characters"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                />
-
-                <label>Confirm Password</label>
-                <input
-                  type="password"
-                  required
-                  minLength={6}
-                  placeholder="Enter password again"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                />
-
-                <button
-                  className="btn-primary full-width"
-                  type="submit"
-                  disabled={authLoading}
-                >
-                  {authLoading ? "Saving..." : "Save Password & Continue"}
-                  <ArrowRight size={17} />
-                </button>
-              </form>
-
-              <div className="auth-note">
-                <ShieldCheck size={16} />
-                Your password is securely managed by Supabase Authentication.
-              </div>
-            </div>
-          </section>
-        )}
-
-        {/* FORGOT PASSWORD */}
-        {page === "ForgotPassword" && (
-          <section className="auth-section">
-            <div className="auth-card">
-              <div className="auth-icon"><KeyRound size={30} /></div>
-              <span className="eyebrow">ACCOUNT RECOVERY</span>
-              <h2>Forgot Password?</h2>
-              <p>Enter your account email. We will send you a password reset link.</p>
-
-              <form onSubmit={sendPasswordReset}>
-                <label>Email Address</label>
-                <input
-                  type="email"
-                  required
-                  placeholder="you@example.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                />
-
-                <button
-                  className="btn-primary full-width"
-                  type="submit"
-                  disabled={authLoading}
-                >
-                  {authLoading ? "Sending..." : "Send Reset Link"}
-                </button>
-              </form>
-
-              <button
-                className="text-button"
-                type="button"
-                onClick={() => {
-                  setPage("Login");
-                  setMessage("");
-                }}
-              >
-                Back to Login
-              </button>
             </div>
           </section>
         )}
@@ -1052,38 +945,18 @@ export default function App() {
         {page === "ResetPassword" && (
           <section className="auth-section">
             <div className="auth-card">
-              <div className="auth-icon"><Lock size={30} /></div>
-              <span className="eyebrow">ACCOUNT RECOVERY</span>
+              <div className="auth-icon"><KeyRound size={30} /></div>
               <h2>Create New Password</h2>
-              <p>Enter and confirm your new password.</p>
-
-              <form onSubmit={saveNewPassword}>
+              <form onSubmit={updatePassword}>
                 <label>New Password</label>
-                <input
-                  type="password"
-                  required
-                  minLength={6}
-                  placeholder="At least 6 characters"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                />
-
+                <input type="password" minLength={6} required
+                  value={password} onChange={e => setPassword(e.target.value)} />
                 <label>Confirm New Password</label>
-                <input
-                  type="password"
-                  required
-                  minLength={6}
-                  placeholder="Enter password again"
+                <input type="password" minLength={6} required
                   value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                />
-
-                <button
-                  className="btn-primary full-width"
-                  type="submit"
-                  disabled={authLoading}
-                >
-                  {authLoading ? "Updating..." : "Update Password"}
+                  onChange={e => setConfirmPassword(e.target.value)} />
+                <button className="btn-primary full-width" disabled={authLoading}>
+                  Update Password
                 </button>
               </form>
             </div>
@@ -1094,58 +967,40 @@ export default function App() {
         {page === "Profile" && (
           <section className="page-section container">
             <PageHeading label="MEMBER ACCOUNT" title="My Profile" />
-
             {loading ? <p>Loading account...</p> : (
-              <>
-                <div className="status-card">
-                  <strong>Registration Status:</strong>
-                  <span className={`status ${profile?.approval_status || "pending"}`}>
-                    {profile?.approval_status || "Not submitted"}
-                  </span>
-                </div>
-
-                <form className="profile-form content-card" onSubmit={saveProfile}>
-                  <h3>Personal Information</h3>
-
-                  <div className="form-grid">
-                    <FormField label="Full Name" value={form.full_name}
-                      onChange={(v) => updateForm("full_name", v)} required />
-
-                    <FormField label="Passing Year" type="number" value={form.passing_year}
-                      onChange={(v) => updateForm("passing_year", v)} required />
-
-                    <FormField label="Batch" value={form.batch}
-                      onChange={(v) => updateForm("batch", v)} />
-
-                    <FormField label="Phone Number" value={form.phone}
-                      onChange={(v) => updateForm("phone", v)} />
-
-                    <div className="field">
-                      <label>Blood Group</label>
-                      <select
-                        value={form.blood_group}
-                        onChange={(e) => updateForm("blood_group", e.target.value)}
-                      >
-                        <option value="">Select blood group</option>
-                        {["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"].map((g) =>
-                          <option key={g}>{g}</option>
-                        )}
-                      </select>
-                    </div>
-
-                    <div className="field full-field">
-                      <label>Short Bio</label>
-                      <textarea
-                        value={form.bio}
-                        onChange={(e) => updateForm("bio", e.target.value)}
-                        placeholder="Tell us a little about yourself..."
-                      />
-                    </div>
+              <form className="profile-form content-card" onSubmit={saveProfile}>
+                <h3>Personal Information</h3>
+                <div className="form-grid">
+                  <FormField label="Full Name" value={form.full_name}
+                    onChange={v => updateForm("full_name", v)} required />
+                  <FormField label="Address (Optional)" value={form.address}
+                    onChange={v => updateForm("address", v)} />
+                  <FormField label="Passing Year" type="number"
+                    value={form.passing_year}
+                    onChange={v => updateForm("passing_year", v)} required />
+                  <FormField label="Batch" value={form.batch}
+                    onChange={v => updateForm("batch", v)} />
+                  <FormField label="Phone Number" value={form.phone}
+                    onChange={v => updateForm("phone", v)} />
+                  <div className="field">
+                    <label>Blood Group</label>
+                    <select value={form.blood_group}
+                      onChange={e => updateForm("blood_group", e.target.value)}>
+                      <option value="">Select blood group</option>
+                      {["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"].map(g =>
+                        <option key={g}>{g}</option>)}
+                    </select>
                   </div>
-
-                  <button className="btn-primary" type="submit">Save Profile</button>
-                </form>
-              </>
+                  <div className="field full-field">
+                    <label>Short Bio</label>
+                    <textarea value={form.bio}
+                      onChange={e => updateForm("bio", e.target.value)} />
+                  </div>
+                </div>
+                <button className="btn-primary" disabled={authLoading}>
+                  <Save size={17} /> Save Profile
+                </button>
+              </form>
             )}
           </section>
         )}
@@ -1159,69 +1014,186 @@ export default function App() {
               <div className="content-card">
                 <ShieldCheck size={35} />
                 <h3>Admin access required</h3>
-                <p>This section is only available to authorised administrators.</p>
               </div>
             ) : (
               <>
                 <div className="content-card">
-                  <h3>Pending Member Registrations ({pending.length})</h3>
-
-                  {pending.length === 0 && <p>No pending member registrations.</p>}
-
-                  {pending.map((person) => (
+                  <h3>Member Management ({members.length})</h3>
+                  <p>Admin can edit member data and manage account access.</p>
+                  {members.map(person => (
                     <div className="pending-row" key={person.id}>
                       <div>
                         <strong>{person.full_name}</strong>
-                        <span>{person.batch} · {person.passing_year}</span>
+                        <span>{person.email || person.batch} · {person.passing_year}</span>
                         <small>{person.phone}</small>
                       </div>
-
                       <div className="pending-actions">
-                        <button
-                          className="approve-btn"
-                          onClick={() => updateApproval(person.id, "approved")}
-                        >
-                          Approve
+                        <button className="approve-btn"
+                          onClick={() => setEditingMember({ ...person })}>
+                          <Edit size={14} /> Edit
                         </button>
-                        <button
-                          className="reject-btn"
-                          onClick={() => updateApproval(person.id, "rejected")}
-                        >
-                          Reject
-                        </button>
+                        {person.id !== session?.user?.id && (
+                          <>
+                            <button className="reject-btn"
+                              onClick={() => manageAuthAccount(person.id, "ban")}>
+                              <Ban size={14} /> Disable
+                            </button>
+                            <button className="approve-btn"
+                              onClick={() => manageAuthAccount(person.id, "unban")}>
+                              <RefreshCw size={14} /> Enable
+                            </button>
+                            <button className="reject-btn"
+                              onClick={() => manageAuthAccount(person.id, "delete")}>
+                              <Trash2 size={14} /> Delete Account
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
                   ))}
                 </div>
 
-                <div className="content-card" style={{ marginTop: "24px" }}>
-                  <h3>Pending Admin Applications ({adminRequests.length})</h3>
+                {editingMember && (
+                  <form className="content-card profile-form"
+                    onSubmit={adminUpdateMember}>
+                    <h3>Edit Member</h3>
+                    <div className="form-grid">
+                      {["full_name", "address", "passing_year", "batch",
+                        "phone", "blood_group", "bio"].map(field => (
+                          <FormField key={field} label={field.replace("_", " ")}
+                            value={editingMember[field] || ""}
+                            onChange={v => setEditingMember(old => ({
+                              ...old, [field]: v
+                            }))} />
+                        ))}
+                    </div>
+                    <button className="btn-primary" disabled={authLoading}>
+                      Save Changes
+                    </button>
+                    <button type="button" className="btn-outline"
+                      onClick={() => setEditingMember(null)}>Cancel</button>
+                  </form>
+                )}
 
-                  {adminRequests.length === 0 && <p>No pending Admin applications.</p>}
+                <div className="content-card" style={{ marginTop: 24 }}>
+                  <h3>Manage Events</h3>
+                  <form onSubmit={saveEvent}>
+                    <label>Event Title</label>
+                    <input required value={eventForm.title}
+                      onChange={e => setEventForm({
+                        ...eventForm, title: e.target.value
+                      })} />
+                    <label>Description</label>
+                    <textarea value={eventForm.description}
+                      onChange={e => setEventForm({
+                        ...eventForm, description: e.target.value
+                      })} />
+                    <label>Date</label>
+                    <input type="date" value={eventForm.event_date}
+                      onChange={e => setEventForm({
+                        ...eventForm, event_date: e.target.value
+                      })} />
+                    <label>Location</label>
+                    <input value={eventForm.location}
+                      onChange={e => setEventForm({
+                        ...eventForm, location: e.target.value
+                      })} />
+                    <button className="btn-primary">
+                      <Plus size={16} /> {editingEvent ? "Update Event" : "Add Event"}
+                    </button>
+                    {editingEvent && (
+                      <button type="button" className="btn-outline"
+                        onClick={() => {
+                          setEditingEvent(null);
+                          setEventForm({
+                            title: "", description: "", event_date: "", location: ""
+                          });
+                        }}>Cancel</button>
+                    )}
+                  </form>
 
-                  {adminRequests.map((request) => (
-                    <div className="pending-row" key={request.user_id}>
-                      <div>
-                        <strong>{request.email}</strong>
-                        <span>Admin access request</span>
-                        <small>
-                          {new Date(request.created_at).toLocaleDateString()}
-                        </small>
-                      </div>
-
+                  {events.map(event => (
+                    <div className="pending-row" key={event.id}>
+                      <div><strong>{event.title}</strong><span>{event.event_date}</span></div>
                       <div className="pending-actions">
-                        <button
-                          className="approve-btn"
-                          onClick={() => updateAdminRequest(request.user_id, "approved")}
-                        >
-                          Approve
-                        </button>
-                        <button
-                          className="reject-btn"
-                          onClick={() => updateAdminRequest(request.user_id, "rejected")}
-                        >
-                          Reject
-                        </button>
+                        <button className="approve-btn" onClick={() => {
+                          setEditingEvent(event.id);
+                          setEventForm({
+                            title: event.title || "",
+                            description: event.description || "",
+                            event_date: event.event_date || "",
+                            location: event.location || ""
+                          });
+                        }}>Edit</button>
+                        <button className="reject-btn"
+                          onClick={() => deleteEvent(event.id)}>Delete</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="content-card" style={{ marginTop: 24 }}>
+                  <h3>Manage Committee</h3>
+                  <form onSubmit={saveCommittee}>
+                    <label>Name</label>
+                    <input required value={committeeForm.name}
+                      onChange={e => setCommitteeForm({
+                        ...committeeForm, name: e.target.value
+                      })} />
+                    <label>Position</label>
+                    <input required value={committeeForm.position}
+                      onChange={e => setCommitteeForm({
+                        ...committeeForm, position: e.target.value
+                      })} />
+                    <label>Batch</label>
+                    <input value={committeeForm.batch}
+                      onChange={e => setCommitteeForm({
+                        ...committeeForm, batch: e.target.value
+                      })} />
+                    <label>Photo URL</label>
+                    <input value={committeeForm.photo_url}
+                      onChange={e => setCommitteeForm({
+                        ...committeeForm, photo_url: e.target.value
+                      })} />
+                    <label>Display Order</label>
+                    <input type="number" value={committeeForm.display_order}
+                      onChange={e => setCommitteeForm({
+                        ...committeeForm, display_order: Number(e.target.value)
+                      })} />
+                    <button className="btn-primary">
+                      <Plus size={16} /> {editingCommittee ? "Update" : "Add Committee Member"}
+                    </button>
+                    {editingCommittee && (
+                      <button type="button" className="btn-outline"
+                        onClick={() => {
+                          setEditingCommittee(null);
+                          setCommitteeForm({
+                            name: "", position: "", batch: "",
+                            photo_url: "", display_order: 0
+                          });
+                        }}>Cancel</button>
+                    )}
+                  </form>
+
+                  {committee.map(person => (
+                    <div className="pending-row" key={person.id}>
+                      <div>
+                        <strong>{person.name}</strong>
+                        <span>{person.position}</span>
+                      </div>
+                      <div className="pending-actions">
+                        <button className="approve-btn" onClick={() => {
+                          setEditingCommittee(person.id);
+                          setCommitteeForm({
+                            name: person.name || "",
+                            position: person.position || "",
+                            batch: person.batch || "",
+                            photo_url: person.photo_url || "",
+                            display_order: person.display_order || 0
+                          });
+                        }}>Edit</button>
+                        <button className="reject-btn"
+                          onClick={() => deleteCommittee(person.id)}>Delete</button>
                       </div>
                     </div>
                   ))}
@@ -1271,9 +1243,9 @@ function FormField({ label, value, onChange, type = "text", required = false }) 
       <label>{label}</label>
       <input
         type={type}
-        value={value}
+        value={value ?? ""}
         required={required}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={e => onChange(e.target.value)}
       />
     </div>
   );
