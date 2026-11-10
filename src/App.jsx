@@ -271,6 +271,7 @@ export default function App() {
     }
   }
 
+
   // UPLOAD GALLERY PHOTO
   async function uploadGalleryPhoto(e) {
     e.preventDefault();
@@ -310,6 +311,7 @@ export default function App() {
     setMessage("");
 
     let storagePath = null;
+    let currentStage = "Checking photo limit";
 
     try {
       const { count, error: countError } = await supabase
@@ -332,6 +334,8 @@ export default function App() {
       storagePath =
         `${galleryBatch.id}/${session.user.id}/${crypto.randomUUID()}-${safeFileName}`;
 
+      currentStage = "Uploading image to Supabase Storage";
+
       const { error: uploadError } = await supabase.storage
         .from("batch-gallery")
         .upload(storagePath, galleryFile, {
@@ -340,6 +344,8 @@ export default function App() {
         });
 
       if (uploadError) throw uploadError;
+
+      currentStage = "Saving photo information to gallery_photos";
 
       const { error: insertError } = await supabase
         .from("gallery_photos")
@@ -359,6 +365,8 @@ export default function App() {
         throw insertError;
       }
 
+      currentStage = "Refreshing gallery";
+
       setGalleryFile(null);
       setGalleryCaption("");
 
@@ -368,8 +376,11 @@ export default function App() {
       setMessage("Photo submitted successfully. Waiting for Admin approval.");
 
       await loadGalleryPhotos(galleryBatch.id);
+
     } catch (error) {
-      setMessage("Photo upload failed: " + error.message);
+      setMessage(
+        `Photo upload failed at [${currentStage}]: ${error.message}`
+      );
     } finally {
       setGalleryUploading(false);
     }
