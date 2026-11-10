@@ -460,6 +460,7 @@ export default function App() {
     }
   }
 
+
   // LOAD ACCOUNT
   async function loadAccount(user) {
     if (!supabase || !user) return;
@@ -503,14 +504,12 @@ export default function App() {
       }
 
       if (admin) {
-        setPage("Admin");
         await Promise.all([
           loadAdminData(),
           loadBatches(),
           loadPendingGallery(true)
         ]);
       } else {
-        setPage("Profile");
         setPendingGallery([]);
       }
 
@@ -521,6 +520,7 @@ export default function App() {
       setLoading(false);
     }
   }
+
 
   // ADMIN DATA
   async function loadAdminData() {
