@@ -32,7 +32,7 @@ export default function App() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [authMode, setAuthMode] = useState("login");
+  const [authMode, setAuthMode] = useState("choose");
   const [loginType, setLoginType] = useState("member");
   const [authLoading, setAuthLoading] = useState(false);
 
@@ -205,7 +205,7 @@ export default function App() {
 
   // ADMIN DATA
   async function loadAdminData() {
-    if (!session && !isAdmin) return;
+    if (!supabase) return;
 
     const { data, error } = await supabase
       .from("profiles")
@@ -228,7 +228,7 @@ export default function App() {
     }
 
     if (name === "Profile" && !session) {
-      openMemberLogin();
+      openLoginOptions();
       return;
     }
 
@@ -237,6 +237,18 @@ export default function App() {
     setMessage("");
   }
 
+  // OPEN LOGIN OPTIONS
+  function openLoginOptions() {
+    setLoginType("member");
+    setAuthMode("choose");
+    setPage("Login");
+    setMenuOpen(false);
+    setMessage("");
+    setPassword("");
+    setConfirmPassword("");
+  }
+
+  // SELECT ADMIN LOGIN
   function openAdminLogin() {
     setLoginType("admin");
     setAuthMode("login");
@@ -247,6 +259,7 @@ export default function App() {
     setConfirmPassword("");
   }
 
+  // SELECT MEMBER LOGIN
   function openMemberLogin() {
     setLoginType("member");
     setAuthMode("login");
@@ -257,6 +270,7 @@ export default function App() {
     setConfirmPassword("");
   }
 
+  // OPEN MEMBER REGISTRATION
   function openMemberRegistration() {
     setLoginType("member");
     setAuthMode("signup");
@@ -358,7 +372,6 @@ export default function App() {
 
       if (error) throw error;
 
-      // Verify role directly from Supabase
       const { data: roleData, error: roleError } = await supabase
         .from("user_roles")
         .select("role")
@@ -369,7 +382,6 @@ export default function App() {
 
       const userIsAdmin = roleData?.role === "admin";
 
-      // Admin login cannot be used by normal members
       if (loginType === "admin" && !userIsAdmin) {
         await supabase.auth.signOut();
         setSession(null);
@@ -382,7 +394,6 @@ export default function App() {
         return;
       }
 
-      // Member login cannot be used by Admin accounts
       if (loginType === "member" && userIsAdmin) {
         await supabase.auth.signOut();
         setSession(null);
@@ -721,7 +732,7 @@ export default function App() {
     setConfirmPassword("");
     setEmail("");
     setLoginType("member");
-    setAuthMode("login");
+    setAuthMode("choose");
     setPage("Home");
     setMessage("");
   }
@@ -789,21 +800,12 @@ export default function App() {
                 </button>
               </>
             ) : (
-              <>
-                <button
-                  className="nav-login"
-                  onClick={openAdminLogin}
-                >
-                  <ShieldCheck size={16} /> Admin Login
-                </button>
-
-                <button
-                  className="nav-login"
-                  onClick={openMemberLogin}
-                >
-                  <Users size={16} /> Member Login
-                </button>
-              </>
+              <button
+                className="nav-login"
+                onClick={openLoginOptions}
+              >
+                <LogIn size={16} /> Login
+              </button>
             )}
           </nav>
         </div>
@@ -1052,16 +1054,65 @@ export default function App() {
           <section className="auth-section">
             <div className="auth-card">
               <div className="auth-icon">
-                {loginType === "admin"
-                  ? <ShieldCheck size={30} />
-                  : <GraduationCap size={30} />}
+                {authMode === "choose" ? (
+                  <LogIn size={30} />
+                ) : loginType === "admin" ? (
+                  <ShieldCheck size={30} />
+                ) : (
+                  <GraduationCap size={30} />
+                )}
               </div>
 
               <span className="eyebrow">
-                {loginType === "admin"
-                  ? "SMSA ADMINISTRATION"
-                  : "SMSA MEMBER ACCOUNT"}
+                {authMode === "choose"
+                  ? "WELCOME TO SMSA"
+                  : loginType === "admin"
+                    ? "SMSA ADMINISTRATION"
+                    : "SMSA MEMBER ACCOUNT"}
               </span>
+
+              {/* LOGIN OPTIONS */}
+              {authMode === "choose" && (
+                <>
+                  <h2>Welcome Back</h2>
+                  <p>Please select your account type to continue.</p>
+
+                  <div className="login-options">
+                    <button
+                      type="button"
+                      className="login-option"
+                      onClick={openMemberLogin}
+                    >
+                      <Users size={27} />
+                      <span>
+                        <strong>Member Login</strong>
+                        <small>Login to your member account</small>
+                      </span>
+                      <ArrowRight size={19} />
+                    </button>
+
+                    <button
+                      type="button"
+                      className="login-option"
+                      onClick={openAdminLogin}
+                    >
+                      <ShieldCheck size={27} />
+                      <span>
+                        <strong>Admin Login</strong>
+                        <small>Login to the Admin Dashboard</small>
+                      </span>
+                      <ArrowRight size={19} />
+                    </button>
+                  </div>
+
+                  <p className="auth-switch">
+                    Don't have an account?{" "}
+                    <button onClick={openMemberRegistration}>
+                      Register Now
+                    </button>
+                  </p>
+                </>
+              )}
 
               {/* LOGIN */}
               {authMode === "login" && (
@@ -1133,15 +1184,9 @@ export default function App() {
                   <button
                     type="button"
                     className="text-button"
-                    onClick={
-                      loginType === "admin"
-                        ? openMemberLogin
-                        : openAdminLogin
-                    }
+                    onClick={openLoginOptions}
                   >
-                    {loginType === "admin"
-                      ? "Go to Member Login"
-                      : "Go to Admin Login"}
+                    Back to Login Options
                   </button>
                 </>
               )}
@@ -1247,6 +1292,7 @@ export default function App() {
                     Already registered?{" "}
                     <button
                       onClick={() => {
+                        setLoginType("member");
                         setAuthMode("login");
                         setMessage("");
                       }}
