@@ -42,16 +42,10 @@ function formatBatchName(name) {
 
   const value = String(name).trim();
 
-  const batchMatch = value.match(/^batch[-\s]*(\d{4})$/i);
+  const match = value.match(/^(?:batch|dakhil)[-\s]*(\d{2}|\d{4})$/i);
 
-  if (batchMatch) {
-    return `Dakhil-${batchMatch[1]}`;
-  }
-
-  const dakhilMatch = value.match(/^dakhil[-\s]*(\d{2}|\d{4})$/i);
-
-  if (dakhilMatch) {
-    const year = dakhilMatch[1];
+  if (match) {
+    const year = match[1];
     return `Dakhil-${year.length === 2 ? `20${year}` : year}`;
   }
 
