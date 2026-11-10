@@ -2,8 +2,8 @@
 import { useEffect, useState } from "react";
 import {
   Menu, X, Users, GraduationCap, CalendarDays, ShieldCheck,
-  LogIn, LogOut, UserCircle, ArrowRight, Mail, Heart,
-  Search, Clock, MapPin, Lock, KeyRound, Trash2, Edit,
+  LogIn, LogOut, UserCircle, ArrowRight, Heart,
+  Search, Clock, MapPin, KeyRound, Trash2, Edit,
   Plus, Save, Ban, RefreshCw
 } from "lucide-react";
 import { supabase } from "./lib/supabase";
@@ -33,6 +33,7 @@ export default function App() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [authMode, setAuthMode] = useState("login");
+  const [loginType, setLoginType] = useState("member");
   const [authLoading, setAuthLoading] = useState(false);
 
   const [search, setSearch] = useState("");
@@ -47,11 +48,18 @@ export default function App() {
   const [editingCommittee, setEditingCommittee] = useState(null);
 
   const [eventForm, setEventForm] = useState({
-    title: "", description: "", event_date: "", location: ""
+    title: "",
+    description: "",
+    event_date: "",
+    location: ""
   });
 
   const [committeeForm, setCommitteeForm] = useState({
-    name: "", position: "", batch: "", photo_url: "", display_order: 0
+    name: "",
+    position: "",
+    batch: "",
+    photo_url: "",
+    display_order: 0
   });
 
   // AUTH INITIALIZATION
@@ -65,22 +73,28 @@ export default function App() {
     let mounted = true;
 
     async function initialize() {
-      const { data } = await supabase.auth.getSession();
+      const { data, error } = await supabase.auth.getSession();
 
-      if (mounted && data.session) {
+      if (error) {
+        setMessage(error.message);
+      }
+
+      if (mounted && data?.session) {
         setSession(data.session);
         await loadAccount(data.session.user);
       } else if (mounted) {
         setLoading(false);
       }
 
-      if (mounted) await loadPublicData();
+      if (mounted) {
+        await loadPublicData();
+      }
     }
 
     initialize();
 
     const { data: listener } = supabase.auth.onAuthStateChange(
-      async (event, newSession) => {
+      (event, newSession) => {
         if (!mounted) return;
 
         if (event === "PASSWORD_RECOVERY") {
@@ -92,8 +106,11 @@ export default function App() {
 
         if (event === "SIGNED_IN" && newSession) {
           setSession(newSession);
+
           setTimeout(() => {
-            if (mounted) loadAccount(newSession.user);
+            if (mounted) {
+              loadAccount(newSession.user);
+            }
           }, 0);
         }
 
@@ -129,7 +146,7 @@ export default function App() {
     if (!c.error) setCommittee(c.data || []);
   }
 
-  // LOAD ACCOUNT AND DATABASE ROLE
+  // LOAD ACCOUNT AND VERIFY DATABASE ROLE
   async function loadAccount(user) {
     if (!supabase || !user) return;
 
@@ -137,14 +154,24 @@ export default function App() {
 
     try {
       const [p, r] = await Promise.all([
-        supabase.from("profiles").select("*").eq("id", user.id).maybeSingle(),
-        supabase.from("user_roles").select("role").eq("user_id", user.id).maybeSingle()
+        supabase
+          .from("profiles")
+          .select("*")
+          .eq("id", user.id)
+          .maybeSingle(),
+
+        supabase
+          .from("user_roles")
+          .select("role")
+          .eq("user_id", user.id)
+          .maybeSingle()
       ]);
 
       if (p.error) throw p.error;
       if (r.error) throw r.error;
 
       const admin = r.data?.role === "admin";
+
       setIsAdmin(admin);
       setProfile(p.data || null);
 
@@ -176,8 +203,9 @@ export default function App() {
     }
   }
 
+  // ADMIN DATA
   async function loadAdminData() {
-    if (!isAdmin && !session) return;
+    if (!session && !isAdmin) return;
 
     const { data, error } = await supabase
       .from("profiles")
@@ -200,13 +228,43 @@ export default function App() {
     }
 
     if (name === "Profile" && !session) {
-      setPage("Login");
+      openMemberLogin();
       return;
     }
 
     setPage(name);
     setMenuOpen(false);
     setMessage("");
+  }
+
+  function openAdminLogin() {
+    setLoginType("admin");
+    setAuthMode("login");
+    setPage("Login");
+    setMenuOpen(false);
+    setMessage("");
+    setPassword("");
+    setConfirmPassword("");
+  }
+
+  function openMemberLogin() {
+    setLoginType("member");
+    setAuthMode("login");
+    setPage("Login");
+    setMenuOpen(false);
+    setMessage("");
+    setPassword("");
+    setConfirmPassword("");
+  }
+
+  function openMemberRegistration() {
+    setLoginType("member");
+    setAuthMode("signup");
+    setPage("Login");
+    setMenuOpen(false);
+    setMessage("");
+    setPassword("");
+    setConfirmPassword("");
   }
 
   function updateForm(field, value) {
@@ -217,6 +275,11 @@ export default function App() {
   async function registerMember(e) {
     e.preventDefault();
     setMessage("");
+
+    if (loginType !== "member") {
+      setMessage("Only members can register.");
+      return;
+    }
 
     if (password.length < 6) {
       setMessage("Password must contain at least 6 characters.");
@@ -247,12 +310,11 @@ export default function App() {
       });
 
       if (error) throw error;
-
       if (!data.user) throw new Error("Registration failed.");
 
       if (!data.session) {
         setMessage(
-          "Account created. Please check your Supabase Email Confirmation setting. It must be OFF for direct login."
+          "Account created, but direct login is unavailable. Please check that Supabase Email Confirmation is OFF."
         );
         return;
       }
@@ -274,7 +336,7 @@ export default function App() {
       setConfirmPassword("");
       setSession(data.session);
       await loadAccount(data.user);
-      setMessage("Registration successful.");
+      setMessage("Member registration successful.");
     } catch (error) {
       setMessage("Registration error: " + error.message);
     } finally {
@@ -282,7 +344,7 @@ export default function App() {
     }
   }
 
-  // LOGIN
+  // SEPARATE ADMIN AND MEMBER LOGIN
   async function login(e) {
     e.preventDefault();
     setMessage("");
@@ -296,9 +358,49 @@ export default function App() {
 
       if (error) throw error;
 
+      // Verify role directly from Supabase
+      const { data: roleData, error: roleError } = await supabase
+        .from("user_roles")
+        .select("role")
+        .eq("user_id", data.user.id)
+        .maybeSingle();
+
+      if (roleError) throw roleError;
+
+      const userIsAdmin = roleData?.role === "admin";
+
+      // Admin login cannot be used by normal members
+      if (loginType === "admin" && !userIsAdmin) {
+        await supabase.auth.signOut();
+        setSession(null);
+        setProfile(null);
+        setIsAdmin(false);
+        setPage("Login");
+        setMessage(
+          "Access denied. This account is not authorised as an Admin."
+        );
+        return;
+      }
+
+      // Member login cannot be used by Admin accounts
+      if (loginType === "member" && userIsAdmin) {
+        await supabase.auth.signOut();
+        setSession(null);
+        setProfile(null);
+        setIsAdmin(false);
+        setPage("Login");
+        setMessage("This is an Admin account. Please use Admin Login.");
+        return;
+      }
+
       setSession(data.session);
       await loadAccount(data.user);
-      setMessage("Login successful.");
+
+      setMessage(
+        userIsAdmin
+          ? "Admin login successful."
+          : "Member login successful."
+      );
     } catch (error) {
       setMessage("Login failed: " + error.message);
     } finally {
@@ -347,6 +449,7 @@ export default function App() {
 
     try {
       const { error } = await supabase.auth.updateUser({ password });
+
       if (error) throw error;
 
       setPassword("");
@@ -442,12 +545,14 @@ export default function App() {
   async function deleteMemberProfile(userId) {
     if (!isAdmin) return;
 
-    if (userId === session.user.id) {
+    if (userId === session?.user?.id) {
       setMessage("You cannot delete your own Admin profile here.");
       return;
     }
 
-    if (!window.confirm("Delete this member's profile data? This does not delete the Auth account.")) return;
+    if (!window.confirm(
+      "Delete this member's profile data? This does not delete the Auth account."
+    )) return;
 
     const { error } = await supabase
       .from("profiles")
@@ -463,11 +568,11 @@ export default function App() {
     }
   }
 
-  // ADMIN: DISABLE / ENABLE / DELETE AUTH ACCOUNT VIA EDGE FUNCTION
+  // ADMIN: DISABLE / ENABLE / DELETE AUTH ACCOUNT
   async function manageAuthAccount(userId, action) {
     if (!isAdmin) return;
 
-    if (userId === session.user.id) {
+    if (userId === session?.user?.id) {
       setMessage("You cannot disable or delete your own Admin account.");
       return;
     }
@@ -505,14 +610,25 @@ export default function App() {
     if (!isAdmin) return;
 
     try {
+      const eventData = {
+        ...eventForm,
+        event_date: eventForm.event_date || null
+      };
+
       const query = editingEvent
-        ? supabase.from("events").update(eventForm).eq("id", editingEvent)
-        : supabase.from("events").insert(eventForm);
+        ? supabase.from("events").update(eventData).eq("id", editingEvent)
+        : supabase.from("events").insert(eventData);
 
       const { error } = await query;
       if (error) throw error;
 
-      setEventForm({ title: "", description: "", event_date: "", location: "" });
+      setEventForm({
+        title: "",
+        description: "",
+        event_date: "",
+        location: ""
+      });
+
       setEditingEvent(null);
       setMessage("Event saved.");
       await loadPublicData();
@@ -524,10 +640,14 @@ export default function App() {
   async function deleteEvent(id) {
     if (!isAdmin || !window.confirm("Delete this event?")) return;
 
-    const { error } = await supabase.from("events").delete().eq("id", id);
+    const { error } = await supabase
+      .from("events")
+      .delete()
+      .eq("id", id);
 
-    if (error) setMessage(error.message);
-    else {
+    if (error) {
+      setMessage(error.message);
+    } else {
       setMessage("Event deleted.");
       await loadPublicData();
     }
@@ -540,15 +660,25 @@ export default function App() {
 
     try {
       const query = editingCommittee
-        ? supabase.from("committee_members").update(committeeForm).eq("id", editingCommittee)
-        : supabase.from("committee_members").insert(committeeForm);
+        ? supabase
+          .from("committee_members")
+          .update(committeeForm)
+          .eq("id", editingCommittee)
+        : supabase
+          .from("committee_members")
+          .insert(committeeForm);
 
       const { error } = await query;
       if (error) throw error;
 
       setCommitteeForm({
-        name: "", position: "", batch: "", photo_url: "", display_order: 0
+        name: "",
+        position: "",
+        batch: "",
+        photo_url: "",
+        display_order: 0
       });
+
       setEditingCommittee(null);
       setMessage("Committee member saved.");
       await loadPublicData();
@@ -565,8 +695,9 @@ export default function App() {
       .delete()
       .eq("id", id);
 
-    if (error) setMessage(error.message);
-    else {
+    if (error) {
+      setMessage(error.message);
+    } else {
       setMessage("Committee member deleted.");
       await loadPublicData();
     }
@@ -584,9 +715,13 @@ export default function App() {
     setSession(null);
     setProfile(null);
     setIsAdmin(false);
+    setMembers([]);
     setForm(emptyForm);
     setPassword("");
     setConfirmPassword("");
+    setEmail("");
+    setLoginType("member");
+    setAuthMode("login");
     setPage("Home");
     setMessage("");
   }
@@ -602,14 +737,19 @@ export default function App() {
       <header className="navbar">
         <div className="nav-container">
           <button className="brand" onClick={() => navigate("Home")}>
-            <span className="brand-icon"><GraduationCap size={27} /></span>
+            <span className="brand-icon">
+              <GraduationCap size={27} />
+            </span>
             <span>
               <strong>SMSA</strong>
               <small>Same Mind Student Association</small>
             </span>
           </button>
 
-          <button className="mobile-menu" onClick={() => setMenuOpen(!menuOpen)}>
+          <button
+            className="mobile-menu"
+            onClick={() => setMenuOpen(!menuOpen)}
+          >
             {menuOpen ? <X /> : <Menu />}
           </button>
 
@@ -627,23 +767,43 @@ export default function App() {
             {session ? (
               <>
                 {!isAdmin && (
-                  <button className="nav-link" onClick={() => navigate("Profile")}>
+                  <button
+                    className="nav-link"
+                    onClick={() => navigate("Profile")}
+                  >
                     <UserCircle size={16} /> My Profile
                   </button>
                 )}
+
                 {isAdmin && (
-                  <button className="nav-link" onClick={() => navigate("Admin")}>
+                  <button
+                    className="nav-link"
+                    onClick={() => navigate("Admin")}
+                  >
                     <ShieldCheck size={16} /> Admin Dashboard
                   </button>
                 )}
+
                 <button className="nav-login" onClick={logout}>
                   <LogOut size={16} /> Logout
                 </button>
               </>
             ) : (
-              <button className="nav-login" onClick={() => setPage("Login")}>
-                <LogIn size={16} /> Login / Sign Up
-              </button>
+              <>
+                <button
+                  className="nav-login"
+                  onClick={openAdminLogin}
+                >
+                  <ShieldCheck size={16} /> Admin Login
+                </button>
+
+                <button
+                  className="nav-login"
+                  onClick={openMemberLogin}
+                >
+                  <Users size={16} /> Member Login
+                </button>
+              </>
             )}
           </nav>
         </div>
@@ -653,29 +813,48 @@ export default function App() {
         {message && (
           <div className="message container">
             {message}
-            <button onClick={() => setMessage("")}><X size={16} /></button>
+            <button onClick={() => setMessage("")}>
+              <X size={16} />
+            </button>
           </div>
         )}
 
+        {/* HOME */}
         {page === "Home" && (
           <>
             <section className="hero">
               <div className="hero-content">
-                <span className="eyebrow">WELCOME TO OUR ALUMNI COMMUNITY</span>
-                <h1>Once a Student,<br /><span>Always a Family.</span></h1>
+                <span className="eyebrow">
+                  WELCOME TO OUR ALUMNI COMMUNITY
+                </span>
+
+                <h1>
+                  Once a Student,<br />
+                  <span>Always a Family.</span>
+                </h1>
+
                 <p>
                   Connecting the past, celebrating the present, and building
                   the future of our beloved institution.
                 </p>
+
                 <div className="hero-actions">
-                  <button className="btn-primary" onClick={() => setPage("Login")}>
+                  <button
+                    className="btn-primary"
+                    onClick={openMemberRegistration}
+                  >
                     Join Our Community <ArrowRight size={18} />
                   </button>
-                  <button className="btn-outline" onClick={() => navigate("Alumni")}>
+
+                  <button
+                    className="btn-outline"
+                    onClick={() => navigate("Alumni")}
+                  >
                     Explore Alumni
                   </button>
                 </div>
               </div>
+
               <div className="hero-art">
                 <div className="hero-circle">
                   <GraduationCap size={105} strokeWidth={1.2} />
@@ -686,15 +865,20 @@ export default function App() {
 
             <section className="stats container">
               <div className="stat-card">
-                <Users size={27} /><strong>{alumni.length}+</strong>
+                <Users size={27} />
+                <strong>{alumni.length}+</strong>
                 <span>Registered Alumni</span>
               </div>
+
               <div className="stat-card">
-                <CalendarDays size={27} /><strong>{events.length}+</strong>
+                <CalendarDays size={27} />
+                <strong>{events.length}+</strong>
                 <span>Community Events</span>
               </div>
+
               <div className="stat-card">
-                <Heart size={27} /><strong>One</strong>
+                <Heart size={27} />
+                <strong>One</strong>
                 <span>United Community</span>
               </div>
             </section>
@@ -703,23 +887,39 @@ export default function App() {
               <div className="section-heading">
                 <span className="eyebrow">OUR COMMUNITY</span>
                 <h2>More Than Just Alumni</h2>
-                <p>Stay connected with friends, classmates, and your institution.</p>
+                <p>
+                  Stay connected with friends, classmates, and your institution.
+                </p>
               </div>
+
               <div className="feature-grid">
-                <Feature icon={<Users />} title="Alumni Network"
-                  text="Reconnect with your classmates and discover fellow alumni." />
-                <Feature icon={<CalendarDays />} title="Events & Reunion"
-                  text="Stay updated about reunions, programs, and community events." />
-                <Feature icon={<Heart />} title="Stronger Together"
-                  text="Build meaningful connections and support one another." />
+                <Feature
+                  icon={<Users />}
+                  title="Alumni Network"
+                  text="Reconnect with your classmates and discover fellow alumni."
+                />
+
+                <Feature
+                  icon={<CalendarDays />}
+                  title="Events & Reunion"
+                  text="Stay updated about reunions, programs, and community events."
+                />
+
+                <Feature
+                  icon={<Heart />}
+                  title="Stronger Together"
+                  text="Build meaningful connections and support one another."
+                />
               </div>
             </section>
           </>
         )}
 
+        {/* ABOUT */}
         {page === "About" && (
           <section className="page-section container">
             <PageHeading label="ABOUT SMSA" title="Our Story" />
+
             <div className="content-card">
               <h3>Same Mind Student Association</h3>
               <p>
@@ -736,9 +936,11 @@ export default function App() {
           </section>
         )}
 
+        {/* ALUMNI */}
         {page === "Alumni" && (
           <section className="page-section container">
             <PageHeading label="OUR NETWORK" title="Meet Our Alumni" />
+
             <div className="search-box">
               <Search size={19} />
               <input
@@ -747,6 +949,7 @@ export default function App() {
                 placeholder="Search by name, batch or passing year..."
               />
             </div>
+
             <div className="alumni-grid">
               {filteredAlumni.map(person => (
                 <div className="alumni-card" key={person.id}>
@@ -755,41 +958,71 @@ export default function App() {
                       ? <img src={person.photo_url} alt={person.full_name} />
                       : <UserCircle size={48} />}
                   </div>
+
                   <h3>{person.full_name}</h3>
                   <p>Batch: {person.batch || "Not specified"}</p>
-                  <span>Passing Year: {person.passing_year || "N/A"}</span>
+                  <span>
+                    Passing Year: {person.passing_year || "N/A"}
+                  </span>
                 </div>
               ))}
-              {filteredAlumni.length === 0 &&
-                <p className="empty-state">No alumni found.</p>}
+
+              {filteredAlumni.length === 0 && (
+                <p className="empty-state">No alumni found.</p>
+              )}
             </div>
           </section>
         )}
 
+        {/* EVENTS */}
         {page === "Events" && (
           <section className="page-section container">
-            <PageHeading label="STAY CONNECTED" title="Events & Announcements" />
+            <PageHeading
+              label="STAY CONNECTED"
+              title="Events & Announcements"
+            />
+
             <div className="event-grid">
               {events.map(event => (
                 <article className="event-card" key={event.id}>
-                  <div className="event-icon"><CalendarDays size={28} /></div>
+                  <div className="event-icon">
+                    <CalendarDays size={28} />
+                  </div>
+
                   <h3>{event.title}</h3>
                   <p>{event.description}</p>
-                  {event.event_date &&
-                    <span><Clock size={15} /> {event.event_date}</span>}
-                  {event.location &&
-                    <span><MapPin size={15} /> {event.location}</span>}
+
+                  {event.event_date && (
+                    <span>
+                      <Clock size={15} /> {event.event_date}
+                    </span>
+                  )}
+
+                  {event.location && (
+                    <span>
+                      <MapPin size={15} /> {event.location}
+                    </span>
+                  )}
                 </article>
               ))}
-              {events.length === 0 &&
-                <p className="empty-state">No events have been published yet.</p>}
+
+              {events.length === 0 && (
+                <p className="empty-state">
+                  No events have been published yet.
+                </p>
+              )}
             </div>
           </section>
         )}
 
+        {/* COMMITTEE */}
         {page === "Committee" && (
           <section className="page-section container">
-            <PageHeading label="LEADERSHIP" title="Our Executive Committee" />
+            <PageHeading
+              label="LEADERSHIP"
+              title="Our Executive Committee"
+            />
+
             <div className="committee-grid">
               {committee.map(member => (
                 <div className="committee-card" key={member.id}>
@@ -798,13 +1031,18 @@ export default function App() {
                       ? <img src={member.photo_url} alt={member.name} />
                       : <UserCircle size={48} />}
                   </div>
+
                   <h3>{member.name}</h3>
                   <strong>{member.position}</strong>
                   <span>{member.batch || ""}</span>
                 </div>
               ))}
-              {committee.length === 0 &&
-                <p className="empty-state">Committee information will be published here.</p>}
+
+              {committee.length === 0 && (
+                <p className="empty-state">
+                  Committee information will be published here.
+                </p>
+              )}
             </div>
           </section>
         )}
@@ -813,130 +1051,246 @@ export default function App() {
         {page === "Login" && (
           <section className="auth-section">
             <div className="auth-card">
-              <div className="auth-icon"><GraduationCap size={30} /></div>
-              <span className="eyebrow">SMSA MEMBER ACCOUNT</span>
+              <div className="auth-icon">
+                {loginType === "admin"
+                  ? <ShieldCheck size={30} />
+                  : <GraduationCap size={30} />}
+              </div>
 
+              <span className="eyebrow">
+                {loginType === "admin"
+                  ? "SMSA ADMINISTRATION"
+                  : "SMSA MEMBER ACCOUNT"}
+              </span>
+
+              {/* LOGIN */}
               {authMode === "login" && (
                 <>
-                  <h2>Member Login</h2>
-                  <p>Login using your registered email and password.</p>
+                  <h2>
+                    {loginType === "admin" ? "Admin Login" : "Member Login"}
+                  </h2>
+
+                  <p>
+                    {loginType === "admin"
+                      ? "Login using your authorised Admin account."
+                      : "Login using your registered email and password."}
+                  </p>
+
                   <form onSubmit={login}>
                     <label>Email Address</label>
-                    <input type="email" required value={email}
+                    <input
+                      type="email"
+                      required
+                      value={email}
                       placeholder="you@example.com"
-                      onChange={e => setEmail(e.target.value)} />
+                      onChange={e => setEmail(e.target.value)}
+                    />
+
                     <label>Password</label>
-                    <input type="password" required value={password}
+                    <input
+                      type="password"
+                      required
+                      value={password}
                       placeholder="Enter your password"
-                      onChange={e => setPassword(e.target.value)} />
-                    <button className="btn-primary full-width" disabled={authLoading}>
+                      onChange={e => setPassword(e.target.value)}
+                    />
+
+                    <button
+                      className="btn-primary full-width"
+                      disabled={authLoading}
+                    >
                       {authLoading ? "Please wait..." : "Login"}
                       <ArrowRight size={17} />
                     </button>
                   </form>
-                  <button className="text-button"
-                    onClick={() => { setAuthMode("forgot"); setMessage(""); }}>
+
+                  <button
+                    className="text-button"
+                    onClick={() => {
+                      setAuthMode("forgot");
+                      setMessage("");
+                    }}
+                  >
                     Forgot Password?
                   </button>
-                  <p className="auth-switch">
-                    Don't have an account?{" "}
-                    <button onClick={() => {
-                      setAuthMode("signup");
-                      setPassword("");
-                      setConfirmPassword("");
-                      setMessage("");
-                    }}>Register Now</button>
-                  </p>
+
+                  {loginType === "member" && (
+                    <p className="auth-switch">
+                      Don't have an account?{" "}
+                      <button onClick={openMemberRegistration}>
+                        Register Now
+                      </button>
+                    </p>
+                  )}
+
+                  <div className="auth-note">
+                    <ShieldCheck size={16} />
+                    {loginType === "admin"
+                      ? "Restricted to authorised Admin accounts only."
+                      : "Member accounts cannot access the Admin Dashboard."}
+                  </div>
+
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={
+                      loginType === "admin"
+                        ? openMemberLogin
+                        : openAdminLogin
+                    }
+                  >
+                    {loginType === "admin"
+                      ? "Go to Member Login"
+                      : "Go to Admin Login"}
+                  </button>
                 </>
               )}
 
-              {authMode === "signup" && (
+              {/* MEMBER REGISTRATION */}
+              {authMode === "signup" && loginType === "member" && (
                 <>
                   <h2>Create Member Account</h2>
                   <p>Fill in your information to join SMSA.</p>
+
                   <form onSubmit={registerMember}>
                     <label>Full Name</label>
-                    <input required value={form.full_name}
-                      onChange={e => updateForm("full_name", e.target.value)} />
+                    <input
+                      required
+                      value={form.full_name}
+                      onChange={e => updateForm("full_name", e.target.value)}
+                    />
 
                     <label>Address (Optional)</label>
-                    <input value={form.address}
+                    <input
+                      value={form.address}
                       onChange={e => updateForm("address", e.target.value)}
-                      placeholder="Your address" />
+                      placeholder="Your address"
+                    />
 
                     <label>Passing Year</label>
-                    <input type="number" required value={form.passing_year}
-                      onChange={e => updateForm("passing_year", e.target.value)} />
+                    <input
+                      type="number"
+                      required
+                      value={form.passing_year}
+                      onChange={e => updateForm("passing_year", e.target.value)}
+                    />
 
                     <label>Batch</label>
-                    <input value={form.batch}
-                      onChange={e => updateForm("batch", e.target.value)} />
+                    <input
+                      value={form.batch}
+                      onChange={e => updateForm("batch", e.target.value)}
+                    />
 
                     <label>Phone Number</label>
-                    <input value={form.phone}
-                      onChange={e => updateForm("phone", e.target.value)} />
+                    <input
+                      value={form.phone}
+                      onChange={e => updateForm("phone", e.target.value)}
+                    />
 
                     <label>Blood Group</label>
-                    <select value={form.blood_group}
-                      onChange={e => updateForm("blood_group", e.target.value)}>
+                    <select
+                      value={form.blood_group}
+                      onChange={e => updateForm("blood_group", e.target.value)}
+                    >
                       <option value="">Select blood group</option>
-                      {["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"].map(g =>
-                        <option key={g}>{g}</option>)}
+                      {["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"].map(g => (
+                        <option key={g} value={g}>{g}</option>
+                      ))}
                     </select>
 
                     <label>Short Bio</label>
-                    <textarea value={form.bio}
+                    <textarea
+                      value={form.bio}
                       onChange={e => updateForm("bio", e.target.value)}
-                      placeholder="Tell us about yourself..." />
+                      placeholder="Tell us about yourself..."
+                    />
 
                     <label>Email Address</label>
-                    <input type="email" required value={email}
+                    <input
+                      type="email"
+                      required
+                      value={email}
                       placeholder="you@example.com"
-                      onChange={e => setEmail(e.target.value)} />
+                      onChange={e => setEmail(e.target.value)}
+                    />
 
                     <label>Password</label>
-                    <input type="password" required minLength={6}
-                      value={password} placeholder="At least 6 characters"
-                      onChange={e => setPassword(e.target.value)} />
+                    <input
+                      type="password"
+                      required
+                      minLength={6}
+                      value={password}
+                      placeholder="At least 6 characters"
+                      onChange={e => setPassword(e.target.value)}
+                    />
 
                     <label>Confirm Password</label>
-                    <input type="password" required minLength={6}
-                      value={confirmPassword} placeholder="Enter password again"
-                      onChange={e => setConfirmPassword(e.target.value)} />
+                    <input
+                      type="password"
+                      required
+                      minLength={6}
+                      value={confirmPassword}
+                      placeholder="Enter password again"
+                      onChange={e => setConfirmPassword(e.target.value)}
+                    />
 
-                    <button className="btn-primary full-width" disabled={authLoading}>
+                    <button
+                      className="btn-primary full-width"
+                      disabled={authLoading}
+                    >
                       {authLoading ? "Creating account..." : "Register"}
                       <ArrowRight size={17} />
                     </button>
                   </form>
+
                   <p className="auth-switch">
                     Already registered?{" "}
-                    <button onClick={() => setAuthMode("login")}>Login</button>
+                    <button
+                      onClick={() => {
+                        setAuthMode("login");
+                        setMessage("");
+                      }}
+                    >
+                      Login
+                    </button>
                   </p>
                 </>
               )}
 
+              {/* FORGOT PASSWORD */}
               {authMode === "forgot" && (
                 <>
                   <h2>Forgot Password?</h2>
                   <p>Enter your email to receive a password reset link.</p>
+
                   <form onSubmit={sendPasswordReset}>
                     <label>Email Address</label>
-                    <input type="email" required value={email}
-                      onChange={e => setEmail(e.target.value)} />
-                    <button className="btn-primary full-width" disabled={authLoading}>
+                    <input
+                      type="email"
+                      required
+                      value={email}
+                      onChange={e => setEmail(e.target.value)}
+                    />
+
+                    <button
+                      className="btn-primary full-width"
+                      disabled={authLoading}
+                    >
                       {authLoading ? "Sending..." : "Send Reset Link"}
                     </button>
                   </form>
-                  <button className="text-button"
-                    onClick={() => setAuthMode("login")}>Back to Login</button>
+
+                  <button
+                    className="text-button"
+                    onClick={() => {
+                      setAuthMode("login");
+                      setMessage("");
+                    }}
+                  >
+                    Back to {loginType === "admin" ? "Admin" : "Member"} Login
+                  </button>
                 </>
               )}
-
-              <div className="auth-note">
-                <ShieldCheck size={16} />
-                Admin access is restricted to authorised accounts.
-              </div>
             </div>
           </section>
         )}
@@ -945,17 +1299,35 @@ export default function App() {
         {page === "ResetPassword" && (
           <section className="auth-section">
             <div className="auth-card">
-              <div className="auth-icon"><KeyRound size={30} /></div>
+              <div className="auth-icon">
+                <KeyRound size={30} />
+              </div>
+
               <h2>Create New Password</h2>
+
               <form onSubmit={updatePassword}>
                 <label>New Password</label>
-                <input type="password" minLength={6} required
-                  value={password} onChange={e => setPassword(e.target.value)} />
+                <input
+                  type="password"
+                  minLength={6}
+                  required
+                  value={password}
+                  onChange={e => setPassword(e.target.value)}
+                />
+
                 <label>Confirm New Password</label>
-                <input type="password" minLength={6} required
+                <input
+                  type="password"
+                  minLength={6}
+                  required
                   value={confirmPassword}
-                  onChange={e => setConfirmPassword(e.target.value)} />
-                <button className="btn-primary full-width" disabled={authLoading}>
+                  onChange={e => setConfirmPassword(e.target.value)}
+                />
+
+                <button
+                  className="btn-primary full-width"
+                  disabled={authLoading}
+                >
                   Update Password
                 </button>
               </form>
@@ -967,36 +1339,72 @@ export default function App() {
         {page === "Profile" && (
           <section className="page-section container">
             <PageHeading label="MEMBER ACCOUNT" title="My Profile" />
-            {loading ? <p>Loading account...</p> : (
-              <form className="profile-form content-card" onSubmit={saveProfile}>
+
+            {loading ? (
+              <p>Loading account...</p>
+            ) : (
+              <form
+                className="profile-form content-card"
+                onSubmit={saveProfile}
+              >
                 <h3>Personal Information</h3>
+
                 <div className="form-grid">
-                  <FormField label="Full Name" value={form.full_name}
-                    onChange={v => updateForm("full_name", v)} required />
-                  <FormField label="Address (Optional)" value={form.address}
-                    onChange={v => updateForm("address", v)} />
-                  <FormField label="Passing Year" type="number"
+                  <FormField
+                    label="Full Name"
+                    value={form.full_name}
+                    onChange={v => updateForm("full_name", v)}
+                    required
+                  />
+
+                  <FormField
+                    label="Address (Optional)"
+                    value={form.address}
+                    onChange={v => updateForm("address", v)}
+                  />
+
+                  <FormField
+                    label="Passing Year"
+                    type="number"
                     value={form.passing_year}
-                    onChange={v => updateForm("passing_year", v)} required />
-                  <FormField label="Batch" value={form.batch}
-                    onChange={v => updateForm("batch", v)} />
-                  <FormField label="Phone Number" value={form.phone}
-                    onChange={v => updateForm("phone", v)} />
+                    onChange={v => updateForm("passing_year", v)}
+                    required
+                  />
+
+                  <FormField
+                    label="Batch"
+                    value={form.batch}
+                    onChange={v => updateForm("batch", v)}
+                  />
+
+                  <FormField
+                    label="Phone Number"
+                    value={form.phone}
+                    onChange={v => updateForm("phone", v)}
+                  />
+
                   <div className="field">
                     <label>Blood Group</label>
-                    <select value={form.blood_group}
-                      onChange={e => updateForm("blood_group", e.target.value)}>
+                    <select
+                      value={form.blood_group}
+                      onChange={e => updateForm("blood_group", e.target.value)}
+                    >
                       <option value="">Select blood group</option>
-                      {["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"].map(g =>
-                        <option key={g}>{g}</option>)}
+                      {["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"].map(g => (
+                        <option key={g} value={g}>{g}</option>
+                      ))}
                     </select>
                   </div>
+
                   <div className="field full-field">
                     <label>Short Bio</label>
-                    <textarea value={form.bio}
-                      onChange={e => updateForm("bio", e.target.value)} />
+                    <textarea
+                      value={form.bio}
+                      onChange={e => updateForm("bio", e.target.value)}
+                    />
                   </div>
                 </div>
+
                 <button className="btn-primary" disabled={authLoading}>
                   <Save size={17} /> Save Profile
                 </button>
@@ -1017,33 +1425,52 @@ export default function App() {
               </div>
             ) : (
               <>
+                {/* MEMBER MANAGEMENT */}
                 <div className="content-card">
                   <h3>Member Management ({members.length})</h3>
-                  <p>Admin can edit member data and manage account access.</p>
+                  <p>
+                    Admin can edit member data and manage account access.
+                  </p>
+
                   {members.map(person => (
                     <div className="pending-row" key={person.id}>
                       <div>
                         <strong>{person.full_name}</strong>
-                        <span>{person.email || person.batch} · {person.passing_year}</span>
+                        <span>
+                          Batch: {person.batch || "Not specified"} ·
+                          {" "}{person.passing_year || "N/A"}
+                        </span>
                         <small>{person.phone}</small>
                       </div>
+
                       <div className="pending-actions">
-                        <button className="approve-btn"
-                          onClick={() => setEditingMember({ ...person })}>
+                        <button
+                          className="approve-btn"
+                          onClick={() => setEditingMember({ ...person })}
+                        >
                           <Edit size={14} /> Edit
                         </button>
+
                         {person.id !== session?.user?.id && (
                           <>
-                            <button className="reject-btn"
-                              onClick={() => manageAuthAccount(person.id, "ban")}>
+                            <button
+                              className="reject-btn"
+                              onClick={() => manageAuthAccount(person.id, "ban")}
+                            >
                               <Ban size={14} /> Disable
                             </button>
-                            <button className="approve-btn"
-                              onClick={() => manageAuthAccount(person.id, "unban")}>
+
+                            <button
+                              className="approve-btn"
+                              onClick={() => manageAuthAccount(person.id, "unban")}
+                            >
                               <RefreshCw size={14} /> Enable
                             </button>
-                            <button className="reject-btn"
-                              onClick={() => manageAuthAccount(person.id, "delete")}>
+
+                            <button
+                              className="reject-btn"
+                              onClick={() => manageAuthAccount(person.id, "delete")}
+                            >
                               <Trash2 size={14} /> Delete Account
                             </button>
                           </>
@@ -1051,127 +1478,234 @@ export default function App() {
                       </div>
                     </div>
                   ))}
+
+                  {members.length === 0 && (
+                    <p className="empty-state">No member profiles found.</p>
+                  )}
                 </div>
 
+                {/* EDIT MEMBER */}
                 {editingMember && (
-                  <form className="content-card profile-form"
-                    onSubmit={adminUpdateMember}>
+                  <form
+                    className="content-card profile-form"
+                    onSubmit={adminUpdateMember}
+                  >
                     <h3>Edit Member</h3>
+
                     <div className="form-grid">
-                      {["full_name", "address", "passing_year", "batch",
-                        "phone", "blood_group", "bio"].map(field => (
-                          <FormField key={field} label={field.replace("_", " ")}
-                            value={editingMember[field] || ""}
-                            onChange={v => setEditingMember(old => ({
-                              ...old, [field]: v
-                            }))} />
-                        ))}
+                      {[
+                        "full_name",
+                        "address",
+                        "passing_year",
+                        "batch",
+                        "phone",
+                        "blood_group",
+                        "bio"
+                      ].map(field => (
+                        <FormField
+                          key={field}
+                          label={field.replace("_", " ")}
+                          value={editingMember[field] || ""}
+                          onChange={v => setEditingMember(old => ({
+                            ...old,
+                            [field]: v
+                          }))}
+                        />
+                      ))}
                     </div>
+
                     <button className="btn-primary" disabled={authLoading}>
                       Save Changes
                     </button>
-                    <button type="button" className="btn-outline"
-                      onClick={() => setEditingMember(null)}>Cancel</button>
+
+                    <button
+                      type="button"
+                      className="btn-outline"
+                      onClick={() => setEditingMember(null)}
+                    >
+                      Cancel
+                    </button>
                   </form>
                 )}
 
+                {/* EVENT MANAGEMENT */}
                 <div className="content-card" style={{ marginTop: 24 }}>
                   <h3>Manage Events</h3>
+
                   <form onSubmit={saveEvent}>
                     <label>Event Title</label>
-                    <input required value={eventForm.title}
+                    <input
+                      required
+                      value={eventForm.title}
                       onChange={e => setEventForm({
-                        ...eventForm, title: e.target.value
-                      })} />
+                        ...eventForm,
+                        title: e.target.value
+                      })}
+                    />
+
                     <label>Description</label>
-                    <textarea value={eventForm.description}
+                    <textarea
+                      value={eventForm.description}
                       onChange={e => setEventForm({
-                        ...eventForm, description: e.target.value
-                      })} />
+                        ...eventForm,
+                        description: e.target.value
+                      })}
+                    />
+
                     <label>Date</label>
-                    <input type="date" value={eventForm.event_date}
+                    <input
+                      type="date"
+                      value={eventForm.event_date}
                       onChange={e => setEventForm({
-                        ...eventForm, event_date: e.target.value
-                      })} />
+                        ...eventForm,
+                        event_date: e.target.value
+                      })}
+                    />
+
                     <label>Location</label>
-                    <input value={eventForm.location}
+                    <input
+                      value={eventForm.location}
                       onChange={e => setEventForm({
-                        ...eventForm, location: e.target.value
-                      })} />
+                        ...eventForm,
+                        location: e.target.value
+                      })}
+                    />
+
                     <button className="btn-primary">
-                      <Plus size={16} /> {editingEvent ? "Update Event" : "Add Event"}
+                      <Plus size={16} />
+                      {editingEvent ? "Update Event" : "Add Event"}
                     </button>
+
                     {editingEvent && (
-                      <button type="button" className="btn-outline"
+                      <button
+                        type="button"
+                        className="btn-outline"
                         onClick={() => {
                           setEditingEvent(null);
                           setEventForm({
-                            title: "", description: "", event_date: "", location: ""
+                            title: "",
+                            description: "",
+                            event_date: "",
+                            location: ""
                           });
-                        }}>Cancel</button>
+                        }}
+                      >
+                        Cancel
+                      </button>
                     )}
                   </form>
 
                   {events.map(event => (
                     <div className="pending-row" key={event.id}>
-                      <div><strong>{event.title}</strong><span>{event.event_date}</span></div>
+                      <div>
+                        <strong>{event.title}</strong>
+                        <span>{event.event_date || "Date not set"}</span>
+                      </div>
+
                       <div className="pending-actions">
-                        <button className="approve-btn" onClick={() => {
-                          setEditingEvent(event.id);
-                          setEventForm({
-                            title: event.title || "",
-                            description: event.description || "",
-                            event_date: event.event_date || "",
-                            location: event.location || ""
-                          });
-                        }}>Edit</button>
-                        <button className="reject-btn"
-                          onClick={() => deleteEvent(event.id)}>Delete</button>
+                        <button
+                          className="approve-btn"
+                          onClick={() => {
+                            setEditingEvent(event.id);
+                            setEventForm({
+                              title: event.title || "",
+                              description: event.description || "",
+                              event_date: event.event_date || "",
+                              location: event.location || ""
+                            });
+                          }}
+                        >
+                          Edit
+                        </button>
+
+                        <button
+                          className="reject-btn"
+                          onClick={() => deleteEvent(event.id)}
+                        >
+                          Delete
+                        </button>
                       </div>
                     </div>
                   ))}
                 </div>
 
+                {/* COMMITTEE MANAGEMENT */}
                 <div className="content-card" style={{ marginTop: 24 }}>
                   <h3>Manage Committee</h3>
+
                   <form onSubmit={saveCommittee}>
                     <label>Name</label>
-                    <input required value={committeeForm.name}
+                    <input
+                      required
+                      value={committeeForm.name}
                       onChange={e => setCommitteeForm({
-                        ...committeeForm, name: e.target.value
-                      })} />
+                        ...committeeForm,
+                        name: e.target.value
+                      })}
+                    />
+
                     <label>Position</label>
-                    <input required value={committeeForm.position}
+                    <input
+                      required
+                      value={committeeForm.position}
                       onChange={e => setCommitteeForm({
-                        ...committeeForm, position: e.target.value
-                      })} />
+                        ...committeeForm,
+                        position: e.target.value
+                      })}
+                    />
+
                     <label>Batch</label>
-                    <input value={committeeForm.batch}
+                    <input
+                      value={committeeForm.batch}
                       onChange={e => setCommitteeForm({
-                        ...committeeForm, batch: e.target.value
-                      })} />
+                        ...committeeForm,
+                        batch: e.target.value
+                      })}
+                    />
+
                     <label>Photo URL</label>
-                    <input value={committeeForm.photo_url}
+                    <input
+                      value={committeeForm.photo_url}
                       onChange={e => setCommitteeForm({
-                        ...committeeForm, photo_url: e.target.value
-                      })} />
+                        ...committeeForm,
+                        photo_url: e.target.value
+                      })}
+                    />
+
                     <label>Display Order</label>
-                    <input type="number" value={committeeForm.display_order}
+                    <input
+                      type="number"
+                      value={committeeForm.display_order}
                       onChange={e => setCommitteeForm({
-                        ...committeeForm, display_order: Number(e.target.value)
-                      })} />
+                        ...committeeForm,
+                        display_order: Number(e.target.value)
+                      })}
+                    />
+
                     <button className="btn-primary">
-                      <Plus size={16} /> {editingCommittee ? "Update" : "Add Committee Member"}
+                      <Plus size={16} />
+                      {editingCommittee
+                        ? "Update"
+                        : "Add Committee Member"}
                     </button>
+
                     {editingCommittee && (
-                      <button type="button" className="btn-outline"
+                      <button
+                        type="button"
+                        className="btn-outline"
                         onClick={() => {
                           setEditingCommittee(null);
                           setCommitteeForm({
-                            name: "", position: "", batch: "",
-                            photo_url: "", display_order: 0
+                            name: "",
+                            position: "",
+                            batch: "",
+                            photo_url: "",
+                            display_order: 0
                           });
-                        }}>Cancel</button>
+                        }}
+                      >
+                        Cancel
+                      </button>
                     )}
                   </form>
 
@@ -1181,19 +1715,30 @@ export default function App() {
                         <strong>{person.name}</strong>
                         <span>{person.position}</span>
                       </div>
+
                       <div className="pending-actions">
-                        <button className="approve-btn" onClick={() => {
-                          setEditingCommittee(person.id);
-                          setCommitteeForm({
-                            name: person.name || "",
-                            position: person.position || "",
-                            batch: person.batch || "",
-                            photo_url: person.photo_url || "",
-                            display_order: person.display_order || 0
-                          });
-                        }}>Edit</button>
-                        <button className="reject-btn"
-                          onClick={() => deleteCommittee(person.id)}>Delete</button>
+                        <button
+                          className="approve-btn"
+                          onClick={() => {
+                            setEditingCommittee(person.id);
+                            setCommitteeForm({
+                              name: person.name || "",
+                              position: person.position || "",
+                              batch: person.batch || "",
+                              photo_url: person.photo_url || "",
+                              display_order: person.display_order || 0
+                            });
+                          }}
+                        >
+                          Edit
+                        </button>
+
+                        <button
+                          className="reject-btn"
+                          onClick={() => deleteCommittee(person.id)}
+                        >
+                          Delete
+                        </button>
                       </div>
                     </div>
                   ))}
@@ -1204,6 +1749,7 @@ export default function App() {
         )}
       </main>
 
+      {/* FOOTER */}
       <footer className="footer">
         <div className="container footer-content">
           <div>
@@ -1211,6 +1757,7 @@ export default function App() {
             <p>Same Mind Student Association</p>
             <span>Connecting generations, building friendships.</span>
           </div>
+
           <p>© {new Date().getFullYear()} SMSA. All rights reserved.</p>
         </div>
       </footer>
@@ -1237,7 +1784,13 @@ function PageHeading({ label, title }) {
   );
 }
 
-function FormField({ label, value, onChange, type = "text", required = false }) {
+function FormField({
+  label,
+  value,
+  onChange,
+  type = "text",
+  required = false
+}) {
   return (
     <div className="field">
       <label>{label}</label>
