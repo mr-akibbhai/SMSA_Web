@@ -178,11 +178,25 @@ export default function App() {
       supabase.from("committee_members").select("*").order("display_order")
     ]);
 
-    if (!a.error) setAlumni(a.data || []);
-    if (!e.error) setEvents(e.data || []);
-    if (!c.error) setCommittee(c.data || []);
-  }
+    if (a.error) {
+      console.error("Alumni Loading Error:", a.error);
+    } else {
+      console.log("Public Alumni Data:", a.data);
+      setAlumni(a.data || []);
+    }
 
+    if (e.error) {
+      console.error("Events Loading Error:", e.error);
+    } else {
+      setEvents(e.data || []);
+    }
+
+    if (c.error) {
+      console.error("Committee Loading Error:", c.error);
+    } else {
+      setCommittee(c.data || []);
+    }
+  }
   // LOAD BATCHES
   async function loadBatches() {
     if (!supabase) return;
