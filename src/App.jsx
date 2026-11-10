@@ -4,7 +4,7 @@ import {
   Menu, X, Users, GraduationCap, CalendarDays, ShieldCheck,
   LogIn, LogOut, UserCircle, ArrowRight, Heart,
   Search, Clock, MapPin, KeyRound, Trash2, Edit,
-  Plus, Save, Ban, RefreshCw
+  Plus, Save, Ban, RefreshCw, ChevronLeft, Layers
 } from "lucide-react";
 import { supabase } from "./lib/supabase";
 
@@ -18,6 +18,21 @@ const emptyForm = {
   phone: "",
   blood_group: "",
   bio: ""
+};
+
+const emptyEventForm = {
+  title: "",
+  description: "",
+  event_date: "",
+  location: ""
+};
+
+const emptyCommitteeForm = {
+  name: "",
+  position: "",
+  batch: "",
+  photo_url: "",
+  display_order: 0
 };
 
 export default function App() {
@@ -42,25 +57,20 @@ export default function App() {
   const [committee, setCommittee] = useState([]);
   const [members, setMembers] = useState([]);
 
+  // BATCH SYSTEM
+  const [batches, setBatches] = useState([]);
+  const [batchYear, setBatchYear] = useState("");
+  const [selectedBatch, setSelectedBatch] = useState(null);
+  const [batchLoading, setBatchLoading] = useState(false);
+  const [showBatchForm, setShowBatchForm] = useState(false);
+
   const [form, setForm] = useState(emptyForm);
   const [editingMember, setEditingMember] = useState(null);
   const [editingEvent, setEditingEvent] = useState(null);
   const [editingCommittee, setEditingCommittee] = useState(null);
 
-  const [eventForm, setEventForm] = useState({
-    title: "",
-    description: "",
-    event_date: "",
-    location: ""
-  });
-
-  const [committeeForm, setCommitteeForm] = useState({
-    name: "",
-    position: "",
-    batch: "",
-    photo_url: "",
-    display_order: 0
-  });
+  const [eventForm, setEventForm] = useState(emptyEventForm);
+  const [committeeForm, setCommitteeForm] = useState(emptyCommitteeForm);
 
   // AUTH INITIALIZATION
   useEffect(() => {
@@ -75,9 +85,7 @@ export default function App() {
     async function initialize() {
       const { data, error } = await supabase.auth.getSession();
 
-      if (error) {
-        setMessage(error.message);
-      }
+      if (error) setMessage(error.message);
 
       if (mounted && data?.session) {
         setSession(data.session);
@@ -87,7 +95,10 @@ export default function App() {
       }
 
       if (mounted) {
-        await loadPublicData();
+        await Promise.all([
+          loadPublicData(),
+          loadBatches()
+        ]);
       }
     }
 
@@ -108,9 +119,7 @@ export default function App() {
           setSession(newSession);
 
           setTimeout(() => {
-            if (mounted) {
-              loadAccount(newSession.user);
-            }
+            if (mounted) loadAccount(newSession.user);
           }, 0);
         }
 
@@ -146,7 +155,29 @@ export default function App() {
     if (!c.error) setCommittee(c.data || []);
   }
 
-  // LOAD ACCOUNT AND VERIFY DATABASE ROLE
+  // LOAD BATCHES
+  async function loadBatches() {
+    if (!supabase) return;
+
+    setBatchLoading(true);
+
+    try {
+      const { data, error } = await supabase
+        .from("batches")
+        .select("id, name, is_active, created_at")
+        .order("name", { ascending: true });
+
+      if (error) throw error;
+
+      setBatches(data || []);
+    } catch (error) {
+      setMessage("Could not load batches: " + error.message);
+    } finally {
+      setBatchLoading(false);
+    }
+  }
+
+  // LOAD ACCOUNT
   async function loadAccount(user) {
     if (!supabase || !user) return;
 
@@ -190,7 +221,7 @@ export default function App() {
 
       if (admin) {
         setPage("Admin");
-        await loadAdminData();
+        await Promise.all([loadAdminData(), loadBatches()]);
       } else {
         setPage("Profile");
       }
@@ -235,9 +266,11 @@ export default function App() {
     setPage(name);
     setMenuOpen(false);
     setMessage("");
+    setSelectedBatch(null);
+    setSearch("");
+    setShowBatchForm(false);
   }
 
-  // OPEN LOGIN OPTIONS
   function openLoginOptions() {
     setLoginType("member");
     setAuthMode("choose");
@@ -248,7 +281,6 @@ export default function App() {
     setConfirmPassword("");
   }
 
-  // SELECT ADMIN LOGIN
   function openAdminLogin() {
     setLoginType("admin");
     setAuthMode("login");
@@ -259,7 +291,6 @@ export default function App() {
     setConfirmPassword("");
   }
 
-  // SELECT MEMBER LOGIN
   function openMemberLogin() {
     setLoginType("member");
     setAuthMode("login");
@@ -270,7 +301,6 @@ export default function App() {
     setConfirmPassword("");
   }
 
-  // OPEN MEMBER REGISTRATION
   function openMemberRegistration() {
     setLoginType("member");
     setAuthMode("signup");
@@ -279,6 +309,7 @@ export default function App() {
     setMessage("");
     setPassword("");
     setConfirmPassword("");
+    loadBatches();
   }
 
   function updateForm(field, value) {
@@ -305,8 +336,17 @@ export default function App() {
       return;
     }
 
-    if (!form.full_name.trim() || !form.passing_year) {
-      setMessage("Full Name and Passing Year are required.");
+    if (!form.full_name.trim() || !form.passing_year || !form.batch) {
+      setMessage("Full Name, Passing Year and Batch are required.");
+      return;
+    }
+
+    const selected = batches.find(
+      batch => batch.name === form.batch && batch.is_active
+    );
+
+    if (!selected) {
+      setMessage("Please select an active Batch.");
       return;
     }
 
@@ -358,7 +398,7 @@ export default function App() {
     }
   }
 
-  // SEPARATE ADMIN AND MEMBER LOGIN
+  // LOGIN
   async function login(e) {
     e.preventDefault();
     setMessage("");
@@ -485,8 +525,19 @@ export default function App() {
 
     if (!session) return;
 
-    if (!form.full_name.trim() || !form.passing_year) {
-      setMessage("Full Name and Passing Year are required.");
+    if (!form.full_name.trim() || !form.passing_year || !form.batch) {
+      setMessage("Full Name, Passing Year and Batch are required.");
+      return;
+    }
+
+    const currentBatch = profile?.batch;
+    const selected = batches.find(
+      batch => batch.name === form.batch &&
+        (batch.is_active || batch.name === currentBatch)
+    );
+
+    if (!selected) {
+      setMessage("Please select an active Batch.");
       return;
     }
 
@@ -501,7 +552,7 @@ export default function App() {
           full_name: form.full_name.trim(),
           address: form.address.trim() || null,
           passing_year: Number(form.passing_year),
-          approval_status: "approved"
+          approval_status: profile?.approval_status || "approved"
         })
         .select()
         .single();
@@ -518,10 +569,96 @@ export default function App() {
     }
   }
 
+  // ADMIN: CREATE BATCH
+  async function createBatch(e) {
+    e.preventDefault();
+
+    if (!isAdmin) {
+      setMessage("Only Admin can create a new batch.");
+      return;
+    }
+
+    const year = Number(batchYear);
+
+    if (!Number.isInteger(year) || year < 6 || year > 99) {
+      setMessage("Enter the last two digits of the year (06–99).");
+      return;
+    }
+
+    const batchName = `Dakhil-${String(year).padStart(2, "0")}`;
+
+    if (batches.some(batch => batch.name.toLowerCase() === batchName.toLowerCase())) {
+      setMessage(`${batchName} already exists.`);
+      return;
+    }
+
+    setAuthLoading(true);
+
+    try {
+      const { error } = await supabase
+        .from("batches")
+        .insert({
+          name: batchName,
+          is_active: true
+        });
+
+      if (error) {
+        if (error.code === "23505") {
+          throw new Error(`${batchName} already exists.`);
+        }
+        throw error;
+      }
+
+      setBatchYear("");
+      setShowBatchForm(false);
+      setMessage(`${batchName} created successfully.`);
+      await loadBatches();
+    } catch (error) {
+      setMessage("Batch creation failed: " + error.message);
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  // ADMIN: ACTIVATE / DEACTIVATE BATCH
+  async function toggleBatch(batch) {
+    if (!isAdmin) return;
+
+    const nextStatus = !batch.is_active;
+
+    const confirmText = nextStatus
+      ? `Activate ${batch.name}?`
+      : `Deactivate ${batch.name}? New members will no longer be able to select it.`;
+
+    if (!window.confirm(confirmText)) return;
+
+    try {
+      const { error } = await supabase
+        .from("batches")
+        .update({ is_active: nextStatus })
+        .eq("id", batch.id);
+
+      if (error) throw error;
+
+      setMessage(
+        `${batch.name} ${nextStatus ? "activated" : "deactivated"} successfully.`
+      );
+
+      await loadBatches();
+    } catch (error) {
+      setMessage("Batch update failed: " + error.message);
+    }
+  }
+
   // ADMIN: EDIT MEMBER
   async function adminUpdateMember(e) {
     e.preventDefault();
     if (!isAdmin || !editingMember) return;
+
+    if (!editingMember.full_name?.trim() || !editingMember.batch) {
+      setMessage("Full Name and Batch are required.");
+      return;
+    }
 
     setAuthLoading(true);
 
@@ -633,13 +770,7 @@ export default function App() {
       const { error } = await query;
       if (error) throw error;
 
-      setEventForm({
-        title: "",
-        description: "",
-        event_date: "",
-        location: ""
-      });
-
+      setEventForm(emptyEventForm);
       setEditingEvent(null);
       setMessage("Event saved.");
       await loadPublicData();
@@ -682,14 +813,7 @@ export default function App() {
       const { error } = await query;
       if (error) throw error;
 
-      setCommitteeForm({
-        name: "",
-        position: "",
-        batch: "",
-        photo_url: "",
-        display_order: 0
-      });
-
+      setCommitteeForm(emptyCommitteeForm);
       setEditingCommittee(null);
       setMessage("Committee member saved.");
       await loadPublicData();
@@ -733,15 +857,76 @@ export default function App() {
     setEmail("");
     setLoginType("member");
     setAuthMode("choose");
+    setSelectedBatch(null);
     setPage("Home");
     setMessage("");
   }
 
+  // BATCH NAMES: DAKHIL-06 TO CURRENT YEAR
+  const currentYear = new Date().getFullYear();
+  const currentShortYear = Number(String(currentYear).slice(-2));
+
+  const generatedBatchNames = Array.from(
+    { length: Math.max(0, currentShortYear - 5) },
+    (_, index) => `Dakhil-${String(index + 6).padStart(2, "0")}`
+  );
+
+  const alumniBatchNames = alumni
+    .map(person => person.batch)
+    .filter(Boolean);
+
+  const displayedBatchNames = [
+    ...new Set([
+      ...generatedBatchNames,
+      ...batches.map(batch => batch.name),
+      ...alumniBatchNames
+    ])
+  ].sort((a, b) => {
+    const yearA = Number(a.match(/\d{2}$/)?.[0] || 0);
+    const yearB = Number(b.match(/\d{2}$/)?.[0] || 0);
+    return yearA - yearB;
+  });
+
+  const filteredBatchNames = displayedBatchNames.filter(name =>
+    name.toLowerCase().includes(search.toLowerCase())
+  );
+
   const filteredAlumni = alumni.filter(person =>
-    `${person.full_name} ${person.batch} ${person.passing_year}`
+    `${person.full_name || ""} ${person.batch || ""} ${person.passing_year || ""}`
       .toLowerCase()
       .includes(search.toLowerCase())
   );
+
+  const selectedBatchAlumni = filteredAlumni.filter(
+    person => person.batch === selectedBatch
+  );
+
+  // BATCH SELECT FIELD
+  function BatchSelect({
+    value,
+    onChange,
+    includeInactive = false,
+    required = false
+  }) {
+    const options = batches.filter(batch =>
+      batch.is_active || (includeInactive && batch.name === value)
+    );
+
+    return (
+      <select
+        value={value || ""}
+        required={required}
+        onChange={e => onChange(e.target.value)}
+      >
+        <option value="">Select Batch</option>
+        {options.map(batch => (
+          <option key={batch.id} value={batch.name}>
+            {batch.name}{!batch.is_active ? " (Inactive)" : ""}
+          </option>
+        ))}
+      </select>
+    );
+  }
 
   return (
     <div className="app">
@@ -800,10 +985,7 @@ export default function App() {
                 </button>
               </>
             ) : (
-              <button
-                className="nav-login"
-                onClick={openLoginOptions}
-              >
+              <button className="nav-login" onClick={openLoginOptions}>
                 <LogIn size={16} /> Login
               </button>
             )}
@@ -941,38 +1123,173 @@ export default function App() {
         {/* ALUMNI */}
         {page === "Alumni" && (
           <section className="page-section container">
-            <PageHeading label="OUR NETWORK" title="Meet Our Alumni" />
+            <PageHeading
+              label="OUR NETWORK"
+              title={selectedBatch ? selectedBatch : "Meet Our Alumni"}
+            />
 
-            <div className="search-box">
-              <Search size={19} />
-              <input
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                placeholder="Search by name, batch or passing year..."
-              />
-            </div>
-
-            <div className="alumni-grid">
-              {filteredAlumni.map(person => (
-                <div className="alumni-card" key={person.id}>
-                  <div className="avatar">
-                    {person.photo_url
-                      ? <img src={person.photo_url} alt={person.full_name} />
-                      : <UserCircle size={48} />}
+            {!selectedBatch && (
+              <>
+                <div className="alumni-top-actions">
+                  <div className="search-box">
+                    <Search size={19} />
+                    <input
+                      value={search}
+                      onChange={e => setSearch(e.target.value)}
+                      placeholder="Search by batch name..."
+                    />
                   </div>
 
-                  <h3>{person.full_name}</h3>
-                  <p>Batch: {person.batch || "Not specified"}</p>
-                  <span>
-                    Passing Year: {person.passing_year || "N/A"}
-                  </span>
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      className="btn-primary add-batch-button"
+                      onClick={() => setShowBatchForm(!showBatchForm)}
+                    >
+                      <Plus size={18} />
+                      Add a New Batch
+                    </button>
+                  )}
                 </div>
-              ))}
 
-              {filteredAlumni.length === 0 && (
-                <p className="empty-state">No alumni found.</p>
-              )}
-            </div>
+                {isAdmin && showBatchForm && (
+                  <div className="content-card add-batch-panel">
+                    <h3>
+                      <Layers size={20} /> Add a New Batch
+                    </h3>
+
+                    <p>
+                      Enter the last two digits of the year. Example: 27
+                      will create Dakhil-27.
+                    </p>
+
+                    <form onSubmit={createBatch}>
+                      <label>Batch Year (06–99)</label>
+                      <input
+                        type="number"
+                        min="6"
+                        max="99"
+                        required
+                        placeholder="Example: 27"
+                        value={batchYear}
+                        onChange={e => setBatchYear(e.target.value)}
+                      />
+
+                      <div className="hero-actions">
+                        <button
+                          className="btn-primary"
+                          disabled={authLoading}
+                        >
+                          <Plus size={17} />
+                          {authLoading ? "Creating..." : "Create Batch"}
+                        </button>
+
+                        <button
+                          type="button"
+                          className="btn-outline"
+                          onClick={() => {
+                            setShowBatchForm(false);
+                            setBatchYear("");
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                )}
+              </>
+            )}
+
+            {selectedBatch ? (
+              <>
+                <button
+                  type="button"
+                  className="btn-outline"
+                  style={{ marginBottom: 24 }}
+                  onClick={() => {
+                    setSelectedBatch(null);
+                    setSearch("");
+                  }}
+                >
+                  <ChevronLeft size={17} /> Back to All Batches
+                </button>
+
+                <div className="search-box">
+                  <Search size={19} />
+                  <input
+                    value={search}
+                    onChange={e => setSearch(e.target.value)}
+                    placeholder="Search alumni by name or passing year..."
+                  />
+                </div>
+
+                <div className="alumni-grid">
+                  {selectedBatchAlumni.map(person => (
+                    <div className="alumni-card" key={person.id}>
+                      <div className="avatar">
+                        {person.photo_url
+                          ? <img src={person.photo_url} alt={person.full_name} />
+                          : <UserCircle size={48} />}
+                      </div>
+
+                      <h3>{person.full_name}</h3>
+                      <p>Batch: {person.batch || "Not specified"}</p>
+                      <span>
+                        Passing Year: {person.passing_year || "N/A"}
+                      </span>
+                    </div>
+                  ))}
+
+                  {selectedBatchAlumni.length === 0 && (
+                    <p className="empty-state">
+                      No alumni found in {selectedBatch}.
+                    </p>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div className="batch-grid">
+                {batchLoading ? (
+                  <p className="empty-state">Loading batches...</p>
+                ) : (
+                  filteredBatchNames.map(batchName => {
+                    const count = alumni.filter(
+                      person => person.batch === batchName
+                    ).length;
+
+                    return (
+                      <button
+                        type="button"
+                        className="batch-card"
+                        key={batchName}
+                        onClick={() => {
+                          setSelectedBatch(batchName);
+                          setSearch("");
+                        }}
+                      >
+                        <div className="batch-card-icon">
+                          <GraduationCap size={30} />
+                        </div>
+
+                        <h3>{batchName}</h3>
+                        <p>
+                          {count} {count === 1 ? "Alumnus" : "Alumni"}
+                        </p>
+
+                        <span>
+                          Explore Batch <ArrowRight size={16} />
+                        </span>
+                      </button>
+                    );
+                  })
+                )}
+
+                {!batchLoading && filteredBatchNames.length === 0 && (
+                  <p className="empty-state">No batches found.</p>
+                )}
+              </div>
+            )}
           </section>
         )}
 
@@ -1071,7 +1388,6 @@ export default function App() {
                     : "SMSA MEMBER ACCOUNT"}
               </span>
 
-              {/* LOGIN OPTIONS */}
               {authMode === "choose" && (
                 <>
                   <h2>Welcome Back</h2>
@@ -1114,7 +1430,6 @@ export default function App() {
                 </>
               )}
 
-              {/* LOGIN */}
               {authMode === "login" && (
                 <>
                   <h2>
@@ -1191,7 +1506,6 @@ export default function App() {
                 </>
               )}
 
-              {/* MEMBER REGISTRATION */}
               {authMode === "signup" && loginType === "member" && (
                 <>
                   <h2>Create Member Account</h2>
@@ -1221,9 +1535,10 @@ export default function App() {
                     />
 
                     <label>Batch</label>
-                    <input
+                    <BatchSelect
                       value={form.batch}
-                      onChange={e => updateForm("batch", e.target.value)}
+                      onChange={value => updateForm("batch", value)}
+                      required
                     />
 
                     <label>Phone Number</label>
@@ -1281,7 +1596,7 @@ export default function App() {
 
                     <button
                       className="btn-primary full-width"
-                      disabled={authLoading}
+                      disabled={authLoading || batchLoading}
                     >
                       {authLoading ? "Creating account..." : "Register"}
                       <ArrowRight size={17} />
@@ -1303,7 +1618,6 @@ export default function App() {
                 </>
               )}
 
-              {/* FORGOT PASSWORD */}
               {authMode === "forgot" && (
                 <>
                   <h2>Forgot Password?</h2>
@@ -1417,11 +1731,15 @@ export default function App() {
                     required
                   />
 
-                  <FormField
-                    label="Batch"
-                    value={form.batch}
-                    onChange={v => updateForm("batch", v)}
-                  />
+                  <div className="field">
+                    <label>Batch</label>
+                    <BatchSelect
+                      value={form.batch}
+                      onChange={value => updateForm("batch", value)}
+                      includeInactive
+                      required
+                    />
+                  </div>
 
                   <FormField
                     label="Phone Number"
@@ -1471,8 +1789,83 @@ export default function App() {
               </div>
             ) : (
               <>
-                {/* MEMBER MANAGEMENT */}
+                {/* BATCH MANAGEMENT */}
                 <div className="content-card">
+                  <h3>
+                    <Layers size={21} style={{ verticalAlign: "middle" }} />{" "}
+                    Batch Management ({batches.length})
+                  </h3>
+
+                  <p>
+                    Enter the last two digits of the year to create a batch.
+                    Example: 27 creates Dakhil-27.
+                  </p>
+
+                  <form onSubmit={createBatch}>
+                    <label>New Batch Year (06–99)</label>
+                    <input
+                      type="number"
+                      min="6"
+                      max="99"
+                      required
+                      placeholder="Example: 27"
+                      value={batchYear}
+                      onChange={e => setBatchYear(e.target.value)}
+                    />
+
+                    <button
+                      className="btn-primary"
+                      disabled={authLoading}
+                    >
+                      <Plus size={17} />
+                      {authLoading ? "Creating..." : "Create Batch"}
+                    </button>
+                  </form>
+
+                  <div style={{ marginTop: 24 }}>
+                    <h3>All Batches</h3>
+
+                    {batchLoading ? (
+                      <p>Loading batches...</p>
+                    ) : batches.length === 0 ? (
+                      <p className="empty-state">No batches found.</p>
+                    ) : (
+                      batches.map(batch => (
+                        <div className="pending-row" key={batch.id}>
+                          <div>
+                            <strong>{batch.name}</strong>
+                            <span>
+                              {batch.is_active ? "Active" : "Inactive"}
+                            </span>
+                          </div>
+
+                          <div className="pending-actions">
+                            <button
+                              type="button"
+                              className={
+                                batch.is_active ? "reject-btn" : "approve-btn"
+                              }
+                              onClick={() => toggleBatch(batch)}
+                            >
+                              {batch.is_active ? (
+                                <>
+                                  <Ban size={14} /> Deactivate
+                                </>
+                              ) : (
+                                <>
+                                  <RefreshCw size={14} /> Activate
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+
+                {/* MEMBER MANAGEMENT */}
+                <div className="content-card" style={{ marginTop: 24 }}>
                   <h3>Member Management ({members.length})</h3>
                   <p>
                     Admin can edit member data and manage account access.
@@ -1535,33 +1928,85 @@ export default function App() {
                   <form
                     className="content-card profile-form"
                     onSubmit={adminUpdateMember}
+                    style={{ marginTop: 24 }}
                   >
                     <h3>Edit Member</h3>
 
                     <div className="form-grid">
-                      {[
-                        "full_name",
-                        "address",
-                        "passing_year",
-                        "batch",
-                        "phone",
-                        "blood_group",
-                        "bio"
-                      ].map(field => (
-                        <FormField
-                          key={field}
-                          label={field.replace("_", " ")}
-                          value={editingMember[field] || ""}
+                      <FormField
+                        label="Full Name"
+                        value={editingMember.full_name}
+                        onChange={v => setEditingMember(old => ({
+                          ...old,
+                          full_name: v
+                        }))}
+                        required
+                      />
+
+                      <FormField
+                        label="Address"
+                        value={editingMember.address}
+                        onChange={v => setEditingMember(old => ({
+                          ...old,
+                          address: v
+                        }))}
+                      />
+
+                      <FormField
+                        label="Passing Year"
+                        type="number"
+                        value={editingMember.passing_year}
+                        onChange={v => setEditingMember(old => ({
+                          ...old,
+                          passing_year: v
+                        }))}
+                      />
+
+                      <div className="field">
+                        <label>Batch</label>
+                        <BatchSelect
+                          value={editingMember.batch}
+                          includeInactive
                           onChange={v => setEditingMember(old => ({
                             ...old,
-                            [field]: v
+                            batch: v
+                          }))}
+                          required
+                        />
+                      </div>
+
+                      <FormField
+                        label="Phone"
+                        value={editingMember.phone}
+                        onChange={v => setEditingMember(old => ({
+                          ...old,
+                          phone: v
+                        }))}
+                      />
+
+                      <FormField
+                        label="Blood Group"
+                        value={editingMember.blood_group}
+                        onChange={v => setEditingMember(old => ({
+                          ...old,
+                          blood_group: v
+                        }))}
+                      />
+
+                      <div className="field full-field">
+                        <label>Short Bio</label>
+                        <textarea
+                          value={editingMember.bio || ""}
+                          onChange={e => setEditingMember(old => ({
+                            ...old,
+                            bio: e.target.value
                           }))}
                         />
-                      ))}
+                      </div>
                     </div>
 
                     <button className="btn-primary" disabled={authLoading}>
-                      Save Changes
+                      <Save size={17} /> Save Changes
                     </button>
 
                     <button
@@ -1628,12 +2073,7 @@ export default function App() {
                         className="btn-outline"
                         onClick={() => {
                           setEditingEvent(null);
-                          setEventForm({
-                            title: "",
-                            description: "",
-                            event_date: "",
-                            location: ""
-                          });
+                          setEventForm(emptyEventForm);
                         }}
                       >
                         Cancel
@@ -1741,13 +2181,7 @@ export default function App() {
                         className="btn-outline"
                         onClick={() => {
                           setEditingCommittee(null);
-                          setCommitteeForm({
-                            name: "",
-                            position: "",
-                            batch: "",
-                            photo_url: "",
-                            display_order: 0
-                          });
+                          setCommitteeForm(emptyCommitteeForm);
                         }}
                       >
                         Cancel
