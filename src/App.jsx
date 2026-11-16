@@ -9,6 +9,8 @@ import {
 } from "lucide-react";
 import { supabase } from "./lib/supabase";
 
+import { ImageUpload, useSiteContent, ContentManager, ContentCard, CommunityLinks, Carousel, CommitteeHistory } from './components/ContentFeatures';
+
 const navItems = ["Home", "About", "Alumni", "Gallery", "Events", "Committee"];
 
 const emptyForm = {
@@ -18,6 +20,7 @@ const emptyForm = {
   batch: "",
   phone: "",
   blood_group: "",
+  photo_url: "",
   bio: ""
 };
 
@@ -25,6 +28,7 @@ const emptyEventForm = {
   title: "",
   description: "",
   event_date: "",
+  image_url: "",
   location: ""
 };
 
@@ -33,6 +37,9 @@ const emptyCommitteeForm = {
   position: "",
   batch: "",
   photo_url: "",
+  introduction: "",
+  committee_year: new Date().getFullYear(),
+  is_current: true,
   display_order: 0
 };
 
@@ -53,6 +60,8 @@ function formatBatchName(name) {
 }
 
 export default function App() {
+  const content = useSiteContent();
+  const accountLoad = useRef(0);
   const [page, setPage] = useState("Home");
   const [activeSection, setActiveSection] = useState("Home");
   const navbarRef = useRef(null);
@@ -105,6 +114,7 @@ export default function App() {
     nav.scrollTo({ left: nav.scrollLeft + item.getBoundingClientRect().left - nav.getBoundingClientRect().left - (nav.clientWidth - item.offsetWidth) / 2, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
   }, [activeSection, publicView]);
   const [session, setSession] = useState(null);
+  useEffect(() => { content.reload(); }, [session?.user?.id]);
   const [profile, setProfile] = useState(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -131,6 +141,7 @@ export default function App() {
   const [showBatchForm, setShowBatchForm] = useState(false);
 
   // BATCH GALLERY
+  const galleryRequest = useRef(0);
   const [galleryBatch, setGalleryBatch] = useState(null);
   const [galleryPhotos, setGalleryPhotos] = useState([]);
   const [pendingGallery, setPendingGallery] = useState([]);
@@ -177,7 +188,7 @@ export default function App() {
       }
     }
 
-    initialize();
+    initialize().catch(error => { if (mounted) { setMessage(error.message); setLoading(false); } });
 
     const { data: listener } = supabase.auth.onAuthStateChange(
       (event, newSession) => {
@@ -194,11 +205,12 @@ export default function App() {
           setSession(newSession);
 
           setTimeout(() => {
-            if (mounted) loadAccount(newSession.user);
+            if (mounted) loadAccount(newSession.user).catch(error => setMessage(error.message));
           }, 0);
         }
 
         if (event === "SIGNED_OUT") {
+          accountLoad.current++;
           setSession(null);
           setProfile(null);
           setIsAdmin(false);
@@ -230,7 +242,7 @@ export default function App() {
     if (a.error) {
       console.error("Alumni Loading Error:", a.error);
     } else {
-      console.log("Public Alumni Data:", a.data);
+
       setAlumni(a.data || []);
     }
 
@@ -288,6 +300,7 @@ export default function App() {
   async function loadGalleryPhotos(batchId) {
     if (!supabase || !batchId) return;
 
+    const requestId = ++galleryRequest.current;
     setGalleryLoading(true);
 
     try {
@@ -300,11 +313,11 @@ export default function App() {
       if (error) throw error;
 
       const photos = await addGalleryImageUrls(data || []);
-      setGalleryPhotos(photos);
+      if (requestId === galleryRequest.current) setGalleryPhotos(photos);
     } catch (error) {
       setMessage("Gallery loading failed: " + error.message);
     } finally {
-      setGalleryLoading(false);
+      if (requestId === galleryRequest.current) setGalleryLoading(false);
     }
   }
 
@@ -513,7 +526,9 @@ export default function App() {
   // LOAD ACCOUNT
   async function loadAccount(user) {
     if (!supabase || !user) return;
-
+    const requestId = ++accountLoad.current;
+    setIsAdmin(false);
+    setProfile(null);
     setLoading(true);
 
     try {
@@ -534,6 +549,7 @@ export default function App() {
       if (p.error) throw p.error;
       if (r.error) throw r.error;
 
+      if (requestId !== accountLoad.current) return;
       const admin = r.data?.role === "admin";
 
       setIsAdmin(admin);
@@ -542,7 +558,7 @@ export default function App() {
       if (p.data) {
         setForm({
           ...emptyForm,
-          ...p.data,
+          ...Object.fromEntries(Object.keys(emptyForm).map(key => [key, p.data[key] ?? ""])),
           passing_year: p.data.passing_year || ""
         });
       } else {
@@ -565,6 +581,7 @@ export default function App() {
       setMessage("");
     } catch (error) {
       setMessage("Account loading error: " + error.message);
+      throw error;
     } finally {
       setLoading(false);
     }
@@ -607,6 +624,7 @@ export default function App() {
         scrollTarget.current = null;
       }
     } else window.scrollTo({ top: 0, behavior: "instant" });
+    document.querySelectorAll(".navbar details[open]").forEach(menu => menu.removeAttribute("open"));
     setPage(name);
     setMessage("");
     setSelectedBatch(null);
@@ -718,7 +736,7 @@ export default function App() {
 
       if (!data.session) {
         setMessage(
-          "Account created, but direct login is unavailable. Please check that Supabase Email Confirmation is OFF."
+          "Account created. Check your email to confirm your account, then sign in and complete your profile."
         );
         return;
       }
@@ -727,10 +745,13 @@ export default function App() {
         .from("profiles")
         .upsert({
           id: data.user.id,
-          ...form,
+          phone: form.phone || null,
+          blood_group: form.blood_group || null,
+          bio: form.bio || null,
+          photo_url: form.photo_url || null,
           batch: formatBatchName(form.batch),
           full_name: form.full_name.trim(),
-          address: form.address.trim() || null,
+          address: (form.address || "").trim() || null,
           passing_year: Number(form.passing_year),
           approval_status: "approved"
         });
@@ -739,8 +760,10 @@ export default function App() {
 
       setPassword("");
       setConfirmPassword("");
+      setPassword("");
       setSession(data.session);
       await loadAccount(data.user);
+      await loadPublicData();
       setMessage("Member registration successful.");
     } catch (error) {
       setMessage("Registration error: " + error.message);
@@ -860,6 +883,8 @@ export default function App() {
 
       if (session) {
         await loadAccount(session.user);
+        setPage("Profile");
+        setMessage("Password updated successfully.");
       } else {
         setPage("Login");
       }
@@ -902,10 +927,13 @@ export default function App() {
         .from("profiles")
         .upsert({
           id: session.user.id,
-          ...form,
+          phone: form.phone || null,
+          blood_group: form.blood_group || null,
+          bio: form.bio || null,
+          photo_url: form.photo_url || null,
           batch: formatBatchName(form.batch),
           full_name: form.full_name.trim(),
-          address: form.address.trim() || null,
+          address: (form.address || "").trim() || null,
           passing_year: Number(form.passing_year),
           approval_status: profile?.approval_status || "approved"
         })
@@ -1202,6 +1230,7 @@ export default function App() {
 
   // LOGOUT
   async function logout() {
+    accountLoad.current++;
     const { error } = await supabase.auth.signOut();
 
     if (error) {
@@ -1310,7 +1339,7 @@ export default function App() {
         <div className="nav-container">
           <button className="brand" onClick={() => navigate("Home")}>
             <span className="brand-icon">
-              <GraduationCap size={27} />
+              {content.items.find(i=>i.kind==="official" && i.enabled)?.image_url ? <img className="brand-logo" src={content.items.find(i=>i.kind==="official" && i.enabled).image_url} alt="SMSA logo"/> : <GraduationCap size={27} />}
             </span>
             <span>
               <strong>SMSA</strong>
@@ -1319,7 +1348,7 @@ export default function App() {
           </button>
 
           <nav className="nav-links" ref={navRef} aria-label="Main navigation">
-            {navItems.map(item => (
+            {navItems.filter(item => item !== "Gallery").map(item => item === "Alumni" ? <details className="alumni-menu" key={item}><summary className={publicView && ["Alumni","Gallery"].includes(activeSection) ? "nav-link active" : "nav-link"} aria-current={publicView && ["Alumni","Gallery"].includes(activeSection) ? "location" : undefined}>Alumni ▾</summary><div className="alumni-submenu"><button onClick={()=>navigate("Alumni")}>Alumni</button><button onClick={()=>navigate("Gallery")}>Gallery</button></div></details> : (
               <button
                 key={item}
                 aria-current={publicView && activeSection === item ? "location" : undefined}
@@ -1330,44 +1359,16 @@ export default function App() {
               </button>
             ))}
 
-            {session ? (
-              <>
-                {!isAdmin && (
-                  <button
-                    className="nav-link"
-                    onClick={() => navigate("Profile")}
-                  >
-                    <UserCircle size={16} /> My Profile
-                  </button>
-                )}
-
-                {isAdmin && (
-                  <button
-                    className="nav-link"
-                    onClick={() => navigate("Admin")}
-                  >
-                    <ShieldCheck size={16} /> Admin Dashboard
-                  </button>
-                )}
-
-                <button className="nav-login" onClick={logout}>
-                  <LogOut size={16} /> Logout
-                </button>
-              </>
-            ) : (
-              <button className="nav-login" onClick={openLoginOptions}>
-                <LogIn size={16} /> Login
-              </button>
-            )}
           </nav>
+          <div className="account-control">{session ? <details><summary aria-label="Open account options">{profile?.photo_url ? <img src={profile.photo_url} alt="My account"/> : <UserCircle size={28}/>}</summary><div className="account-menu"><button onClick={()=>navigate("Profile")}>My Profile</button>{isAdmin && <button onClick={()=>navigate("Admin")}>Admin Dashboard</button>}<button onClick={logout}>Logout</button></div></details> : <button className="nav-login" onClick={openLoginOptions}><LogIn size={16}/> Login</button>}</div>
         </div>
       </header>
 
       <main>
         {message && (
-          <div className="message container">
+          <div className="message container" role="status">
             {message}
-            <button onClick={() => setMessage("")}>
+            <button aria-label="Dismiss message" onClick={() => setMessage("")}>
               <X size={16} />
             </button>
           </div>
@@ -1376,7 +1377,9 @@ export default function App() {
         {/* HOME */}
         {publicView && (
           <>
-            <section id="home" className="hero">
+            <div id="home"><Carousel items={content.items}/>
+            {events.length > 0 && <section className="container section featured-events"><h2>Featured Events</h2><div className="event-grid">{[...events].sort((a,b)=>{const today=new Date().toISOString().slice(0,10);return Number(b.event_date>=today)-Number(a.event_date>=today) || (a.event_date||'9999').localeCompare(b.event_date||'9999');}).map(event=><article className="event-card" key={event.id}>{event.image_url && <img className="event-image" src={event.image_url} alt={event.title}/>}<h3>{event.title}</h3><p>{event.description}</p><p>{event.event_date || 'Date to be announced'} · {event.location}</p></article>)}</div></section>}
+            </div><section className="hero">
               <div className="hero-content">
                 <span className="eyebrow">
                   WELCOME TO OUR ALUMNI COMMUNITY
@@ -1472,7 +1475,7 @@ export default function App() {
         {/* ABOUT */}
         {publicView && (
           <section id="about" className="page-section container">
-            <PageHeading label="ABOUT SMSA" title="Our Story" />
+            <PageHeading label="ABOUT SMSA" title="Our Story" />{content.error && <div role="status"><p>{content.error}</p><button className="btn-outline" onClick={content.reload}>Retry additional content</button></div>}<ContentCard item={content.items.find(i=>i.kind==="official" && i.enabled)}/><CommunityLinks items={content.items}/>
 
             <div className="content-card">
               <h3>Same Mind Student Association</h3>
@@ -1585,6 +1588,7 @@ export default function App() {
                   <ChevronLeft size={17} /> Back to All Batches
                 </button>
 
+                <ContentCard item={content.items.find(i=>i.kind==="batch" && i.key===formatBatchName(selectedBatch) && i.enabled)}/>
                 <div className="search-box">
                   <Search size={19} />
                   <input
@@ -1905,7 +1909,7 @@ export default function App() {
                     <CalendarDays size={28} />
                   </div>
 
-                  <h3>{event.title}</h3>
+                  {event.image_url && <img className="event-image" src={event.image_url} alt={event.title}/>}<h3>{event.title}</h3>
                   <p>{event.description}</p>
 
                   {event.event_date && (
@@ -1940,7 +1944,7 @@ export default function App() {
             />
 
             <div className="committee-grid">
-              {committee.map(member => (
+              {committee.filter(m=>m.is_current!==false).map(member => (
                 <div className="committee-card" key={member.id}>
                   <div className="avatar">
                     {member.photo_url
@@ -1950,7 +1954,7 @@ export default function App() {
 
                   <h3>{member.name}</h3>
                   <strong>{member.position}</strong>
-                  <span>{member.batch || ""}</span>
+                  <span>{member.batch || ""}</span><p>{member.introduction}</p>
                 </div>
               ))}
 
@@ -1960,6 +1964,7 @@ export default function App() {
                 </p>
               )}
             </div>
+            <CommitteeHistory members={committee}/>
           </section>
         )}
 
@@ -2304,7 +2309,7 @@ export default function App() {
                 className="profile-form content-card"
                 onSubmit={saveProfile}
               >
-                <h3>Personal Information</h3>
+                <h3>Personal Information</h3>{form.photo_url && <img className="image-preview profile-photo" src={form.photo_url} alt="My profile"/>}<ImageUpload userId={session?.user.id} onUploaded={url=>updateForm("photo_url",url)}/>
 
                 <div className="form-grid">
                   <FormField
@@ -2386,6 +2391,7 @@ export default function App() {
               </div>
             ) : (
               <>
+                <ContentManager content={content} userId={session?.user.id} batchNames={displayedBatchNames}/>
                 {/* BATCH MANAGEMENT */}
                 <div className="content-card">
                   <h3>
@@ -2729,7 +2735,7 @@ export default function App() {
                 <div className="content-card" style={{ marginTop: 24 }}>
                   <h3>Manage Events</h3>
 
-                  <form onSubmit={saveEvent}>
+                  <form onSubmit={saveEvent}><ImageUpload userId={session?.user.id} admin onUploaded={image_url=>setEventForm(d=>({...d,image_url}))}/>{eventForm.image_url && <img className="image-preview" src={eventForm.image_url} alt="Event preview"/>}
                     <label>Event Title</label>
                     <input
                       required
@@ -2803,6 +2809,7 @@ export default function App() {
                               title: event.title || "",
                               description: event.description || "",
                               event_date: event.event_date || "",
+                              image_url: event.image_url || "",
                               location: event.location || ""
                             });
                           }}
@@ -2825,7 +2832,10 @@ export default function App() {
                 <div className="content-card" style={{ marginTop: 24 }}>
                   <h3>Manage Committee</h3>
 
-                  <form onSubmit={saveCommittee}>
+                  <form onSubmit={saveCommittee}><ImageUpload userId={session?.user.id} admin onUploaded={photo_url=>setCommitteeForm(d=>({...d,photo_url}))}/>
+                    <label>Committee year<input type="number" min="1900" max="2200" required value={committeeForm.committee_year} onChange={e=>setCommitteeForm({...committeeForm,committee_year:Number(e.target.value)})}/></label>
+                    <label className="checkbox-label"><input type="checkbox" checked={committeeForm.is_current} onChange={e=>setCommitteeForm({...committeeForm,is_current:e.target.checked})}/> Current committee (uncheck for historical committee)</label>
+                    <label>Introduction<textarea value={committeeForm.introduction} onChange={e=>setCommitteeForm({...committeeForm,introduction:e.target.value})}/></label>
                     <label>Name</label>
                     <input
                       required
@@ -2899,7 +2909,7 @@ export default function App() {
                     <div className="pending-row" key={person.id}>
                       <div>
                         <strong>{person.name}</strong>
-                        <span>{person.position}</span>
+                        <span>{person.position} · {person.is_current!==false ? "Current" : "Historical"} · {person.committee_year || "Year not set"}</span>
                       </div>
 
                       <div className="pending-actions">
@@ -2912,6 +2922,9 @@ export default function App() {
                               position: person.position || "",
                               batch: person.batch || "",
                               photo_url: person.photo_url || "",
+                              introduction: person.introduction || "",
+                              is_current: person.is_current !== false,
+                              committee_year: person.committee_year || new Date().getFullYear(),
                               display_order: person.display_order || 0
                             });
                           }}
@@ -2979,8 +2992,9 @@ function FormField({
 }) {
   return (
     <div className="field">
-      <label>{label}</label>
+      <label htmlFor={"field-" + label.replace(/\W/g, "-")}>{label}</label>
       <input
+        id={"field-" + label.replace(/\W/g, "-")}
         type={type}
         value={value ?? ""}
         required={required}
