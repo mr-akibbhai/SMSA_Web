@@ -1,7 +1,7 @@
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
-  Menu, X, Users, GraduationCap, CalendarDays, ShieldCheck,
+  X, Users, GraduationCap, CalendarDays, ShieldCheck,
   LogIn, LogOut, UserCircle, ArrowRight, Heart,
   Search, Clock, MapPin, KeyRound, Trash2, Edit,
   Plus, Save, Ban, RefreshCw, ChevronLeft, Layers,
@@ -54,7 +54,56 @@ function formatBatchName(name) {
 
 export default function App() {
   const [page, setPage] = useState("Home");
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [activeSection, setActiveSection] = useState("Home");
+  const navbarRef = useRef(null);
+  const navRef = useRef(null);
+  const scrollTarget = useRef(null);
+  const publicView = navItems.includes(page);
+
+  useEffect(() => {
+    if (!publicView) return;
+    let frame;
+    const update = () => {
+      const offset = (navbarRef.current?.offsetHeight || 80) + 24;
+      let current = "Home";
+      for (const name of navItems) {
+        if (document.getElementById(name.toLowerCase())?.getBoundingClientRect().top <= offset) current = name;
+      }
+      if (window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 2) current = "Committee";
+      setActiveSection(current);
+    };
+    const onScroll = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(update);
+    };
+    const resize = new ResizeObserver(() => {
+      document.documentElement.style.setProperty("--navbar-height", (navbarRef.current?.offsetHeight || 80) + "px");
+      onScroll();
+    });
+    if (navbarRef.current) resize.observe(navbarRef.current);
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll);
+    frame = requestAnimationFrame(() => {
+      if (scrollTarget.current) {
+        document.getElementById(scrollTarget.current.toLowerCase())?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+        scrollTarget.current = null;
+      }
+      update();
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      resize.disconnect();
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onScroll);
+    };
+  }, [publicView]);
+
+  useEffect(() => {
+    const nav = navRef.current;
+    const item = nav?.querySelector('[aria-current="location"]');
+    if (!nav || !item) return;
+    nav.scrollTo({ left: nav.scrollLeft + item.getBoundingClientRect().left - nav.getBoundingClientRect().left - (nav.clientWidth - item.offsetWidth) / 2, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+  }, [activeSection, publicView]);
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
   const [isAdmin, setIsAdmin] = useState(false);
@@ -551,8 +600,14 @@ export default function App() {
       return;
     }
 
+    if (navItems.includes(name)) {
+      scrollTarget.current = name;
+      if (publicView) {
+        document.getElementById(name.toLowerCase())?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+        scrollTarget.current = null;
+      }
+    } else window.scrollTo({ top: 0, behavior: "instant" });
     setPage(name);
-    setMenuOpen(false);
     setMessage("");
     setSelectedBatch(null);
     setSearch("");
@@ -572,7 +627,6 @@ export default function App() {
     setLoginType("member");
     setAuthMode("choose");
     setPage("Login");
-    setMenuOpen(false);
     setMessage("");
     setPassword("");
     setConfirmPassword("");
@@ -582,7 +636,6 @@ export default function App() {
     setLoginType("admin");
     setAuthMode("login");
     setPage("Login");
-    setMenuOpen(false);
     setMessage("");
     setPassword("");
     setConfirmPassword("");
@@ -592,7 +645,6 @@ export default function App() {
     setLoginType("member");
     setAuthMode("login");
     setPage("Login");
-    setMenuOpen(false);
     setMessage("");
     setPassword("");
     setConfirmPassword("");
@@ -602,7 +654,6 @@ export default function App() {
     setLoginType("member");
     setAuthMode("signup");
     setPage("Login");
-    setMenuOpen(false);
     setMessage("");
     setPassword("");
     setConfirmPassword("");
@@ -1255,7 +1306,7 @@ export default function App() {
 
   return (
     <div className="app">
-      <header className="navbar">
+      <header className="navbar" ref={navbarRef}>
         <div className="nav-container">
           <button className="brand" onClick={() => navigate("Home")}>
             <span className="brand-icon">
@@ -1267,18 +1318,12 @@ export default function App() {
             </span>
           </button>
 
-          <button
-            className="mobile-menu"
-            onClick={() => setMenuOpen(!menuOpen)}
-          >
-            {menuOpen ? <X /> : <Menu />}
-          </button>
-
-          <nav className={menuOpen ? "nav-links open" : "nav-links"}>
+          <nav className="nav-links" ref={navRef} aria-label="Main navigation">
             {navItems.map(item => (
               <button
                 key={item}
-                className={page === item ? "nav-link active" : "nav-link"}
+                aria-current={publicView && activeSection === item ? "location" : undefined}
+                className={publicView && activeSection === item ? "nav-link active" : "nav-link"}
                 onClick={() => navigate(item)}
               >
                 {item}
@@ -1329,9 +1374,9 @@ export default function App() {
         )}
 
         {/* HOME */}
-        {page === "Home" && (
+        {publicView && (
           <>
-            <section className="hero">
+            <section id="home" className="hero">
               <div className="hero-content">
                 <span className="eyebrow">
                   WELCOME TO OUR ALUMNI COMMUNITY
@@ -1425,8 +1470,8 @@ export default function App() {
         )}
 
         {/* ABOUT */}
-        {page === "About" && (
-          <section className="page-section container">
+        {publicView && (
+          <section id="about" className="page-section container">
             <PageHeading label="ABOUT SMSA" title="Our Story" />
 
             <div className="content-card">
@@ -1446,8 +1491,8 @@ export default function App() {
         )}
 
         {/* ALUMNI */}
-        {page === "Alumni" && (
-          <section className="page-section container">
+        {publicView && (
+          <section id="alumni" className="page-section container">
             <PageHeading
               label="OUR NETWORK"
               title={selectedBatch ? formatBatchName(selectedBatch) : "Meet Our Alumni"}
@@ -1620,8 +1665,8 @@ export default function App() {
         )}
 
         {/* BATCH GALLERY */}
-        {page === "Gallery" && (
-          <section className="page-section container">
+        {publicView && (
+          <section id="gallery" className="page-section container">
             <PageHeading
               label="MEMORIES TOGETHER"
               title={galleryBatch
@@ -1846,8 +1891,8 @@ export default function App() {
         )}
 
         {/* EVENTS */}
-        {page === "Events" && (
-          <section className="page-section container">
+        {publicView && (
+          <section id="events" className="page-section container">
             <PageHeading
               label="STAY CONNECTED"
               title="Events & Announcements"
@@ -1887,8 +1932,8 @@ export default function App() {
         )}
 
         {/* COMMITTEE */}
-        {page === "Committee" && (
-          <section className="page-section container">
+        {publicView && (
+          <section id="committee" className="page-section container">
             <PageHeading
               label="LEADERSHIP"
               title="Our Executive Committee"

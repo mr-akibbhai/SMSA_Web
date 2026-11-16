@@ -151,14 +151,7 @@ main {
   background: var(--primary-dark);
 }
 
-.mobile-menu {
-  display: none;
-  border: none;
-  background: var(--primary-light);
-  color: var(--primary);
-  padding: 9px;
-  border-radius: 9px;
-}
+
 
 /* COMMON */
 
@@ -1087,28 +1080,9 @@ select {
     min-height: 70px;
   }
 
-  .mobile-menu {
-    display: grid;
-    place-items: center;
-  }
 
-  .nav-links {
-    display: none;
-    position: absolute;
-    top: 70px;
-    left: 0;
-    right: 0;
-    padding: 16px 24px 22px;
-    background: white;
-    border-bottom: 1px solid var(--border);
-    box-shadow: 0 15px 25px rgba(0, 0, 0, 0.06);
-    flex-direction: column;
-    align-items: stretch;
-  }
 
-  .nav-links.open {
-    display: flex;
-  }
+
 
   .nav-link,
   .nav-login {
@@ -1502,5 +1476,83 @@ select {
 
   .gallery-admin-actions button {
     flex: 1;
+  }
+}
+
+/* Continuous section navigation */
+#home,
+#about,
+#alumni,
+#gallery,
+#events,
+#committee {
+  scroll-margin-top: calc(var(--navbar-height, 80px) + 16px);
+}
+
+.nav-container {
+  gap: 20px;
+}
+
+.brand {
+  flex-shrink: 0;
+}
+
+.nav-links {
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+  padding: 6px 0;
+}
+
+.nav-link,
+.nav-login {
+  flex: 0 0 auto;
+  width: auto;
+  white-space: nowrap;
+}
+
+.nav-link:focus-visible,
+.nav-login:focus-visible,
+.brand:focus-visible {
+  outline: 3px solid var(--primary);
+  outline-offset: 2px;
+}
+
+@media (max-width: 1000px) {
+  .nav-container {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+    padding: 10px 16px;
+  }
+
+  .nav-links {
+    position: static;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    width: 100%;
+    gap: 5px;
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+  }
+
+  .nav-link,
+  .nav-login {
+    min-height: 44px;
+    padding: 10px 12px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  .nav-link,
+  .nav-login {
+    transition: none;
   }
 }
