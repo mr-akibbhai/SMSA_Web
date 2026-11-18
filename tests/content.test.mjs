@@ -14,5 +14,17 @@ try {
  assert.ok(history.includes('Committee of 2020'));
  assert.ok(!history.includes('CurrentOnly'),'current members must not leak into historical groups');
  assert.equal(renderToStaticMarkup(React.createElement(m.Carousel,{items:[{kind:'carousel',enabled:false,image_url:'https://example.com/a.png'}]})),'');
+ const domain=await server.ssrLoadModule('/src/components/Experience.jsx');
+ assert.equal(domain.MANUAL_PAUSE_MS,7000);
+ assert.equal(domain.interactionPauseUntil(1000),8000);
+ const about=renderToStaticMarkup(React.createElement(domain.AboutSlideshow,{items:[{id:'a',kind:'about',enabled:true,image_url:'/a.png',display_order:2,title:'Later'},{id:'b',kind:'about',enabled:true,image_url:'/b.png',display_order:1,title:'First'},{id:'c',kind:'about',enabled:false,image_url:'/c.png',title:'Hidden'}]}));
+ assert.ok(about.indexOf('First')<about.indexOf('Later'));assert.ok(!about.includes('Hidden'));
+ const i18n=await server.ssrLoadModule('/src/lib/i18n.jsx');
+ assert.equal(i18n.translate('Save Changes','bn'),'পরিবর্তন সংরক্ষণ করুন');
+ assert.equal(i18n.translate('Dakhil-2020','bn'),'Dakhil-2020');
+ assert.equal(i18n.translate('A real member name','bn'),'A real member name');
+ const notices=await server.ssrLoadModule('/src/lib/notifications.js');
+ for(const message of notices.knownMessages)assert.notEqual(i18n.translate(message,'bn'),message,'Missing notification translation: '+message);
+ console.log('PASS: 7-second interaction pause, About ordering/visibility, Bengali translation and user-data preservation');
  console.log('PASS: HTTPS link validation, disabled/unsafe links, committee separation, hidden carousel');
 } finally { await server.close(); }

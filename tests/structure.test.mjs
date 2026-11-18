@@ -1,0 +1,11 @@
+import fs from 'node:fs';
+import assert from 'node:assert/strict';
+import {parse} from '@babel/parser';
+import traverseModule from '@babel/traverse';
+const traverse=traverseModule.default || traverseModule;
+const ast=parse(fs.readFileSync('src/App.jsx','utf8'),{sourceType:'module',plugins:['jsx']});
+const panels=new Map();let memberHandler=false;
+traverse(ast,{JSXElement(path){const cls=path.node.openingElement.attributes.find(a=>a.name?.name==='className')?.value?.value;if(cls?.startsWith('admin-section ')){const name=cls.split('admin-').at(-1);panels.set(name,JSON.stringify(path.node));assert.ok(path.node.openingElement.attributes.some(a=>a.name?.name==='hidden'));}},CallExpression(path){if(path.node.callee.name==='go' && path.node.arguments[0]?.properties?.some(p=>p.key?.name==='editMember' && p.value?.object?.name==='person'))memberHandler=true;}});
+for(const [panel,operation] of [['batches','createBatch'],['gallery','reviewGalleryPhoto'],['members','adminUpdateMember'],['events','saveEvent'],['committee','saveCommittee']])assert.ok(panels.get(panel)?.includes(operation),panel+' must contain its management action');
+assert.ok(memberHandler,'Edit must navigate to the selected member editor');
+console.log('PASS: isolated admin panel ownership and member edit navigation');

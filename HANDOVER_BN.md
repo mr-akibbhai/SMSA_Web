@@ -1,47 +1,104 @@
-# SMSA স্থানীয় বাস্তবায়ন ও Supabase setup
+> SQL নির্দেশনার আপডেট: বর্তমান live setup-এর জন্য [নতুন manual migration review plan](supabase/LIVE_MIGRATION_PLAN_BN.md) অনুসরণ করুন। নিচের পুরোনো fresh-install SQL নির্দেশনা superseded।
 
-কোড স্থানীয়ভাবে পরিবর্তন করা হয়েছে। GitHub push, Vercel deployment বা production SQL চালানো হয়নি।
+# SMSA Upgrade — বাংলা handover (১৯ নভেম্বর ২০২৬)
 
-## স্থানীয়ভাবে চালানো
+এই কাজ শুধু স্থানীয় source ও SQL প্রস্তুতিতে সীমিত। Live SQL/database/bucket settings, .env, GitHub বা Vercel পরিবর্তন করা হয়নি। আগের audit-এর সব ত্রুটি সমাধান হয়েছে বা পুরো production system secure—এমন দাবি করা হচ্ছে না।
+
+## সম্পন্ন পরিবর্তন
+
+- Home-এর মূল পরিচিতি সবার আগে; তিনটি promotional card বাদ। Home/About/Events-এর continuous flow ও sticky navigation রাখা হয়েছে।
+- Alumni/Committee আলাদা selection/detail experience। Batch photos selection cards-এ; batch detail-এ একটি Batch Gallery button ও সদস্যরা। Main sections detail page-এ মেশে না।
+- History-backed route state: Back/Forward, batch/gallery context, searches এবং login choices সংরক্ষণ। URL hash-এ credential থাকে না; gallery link-এ record metadata বাদ দিয়ে নাম রাখা হয়।
+- Batch/committee rails: ডান থেকে বামে automatic movement, mouse drag/touch/manual arrows; interaction-এর পরে ৭ সেকেন্ড pause; reduced-motion support। Loop-এর visual duplicate keyboard/screen-reader list থেকে বাদ।
+- About images-এর পৃথক content kind, visibility/display order ও ২ সেকেন্ডের opacity fade slideshow।
+- Events image/description, enabled ও display_order controls। Public UI disabled events লুকায়; SQL-তেও restrictive visibility guard প্রস্তুত।
+- Passing Year forms/cards থেকে সরানো; column বা historical data মুছে দেওয়া হয়নি। Existing profile edit historical year ধরে রাখে; নতুন registration-এর legacy required value batch year থেকে নেওয়া হয়। Non-year custom batches-এর জন্য database constraint review লাগতে পারে।
+- Admin overview cards ও পৃথক content/batch/member/gallery/event/committee panels। Member Management batch-first ও searchable। Member editor selected record ID দিয়ে update করে এবং returned row যাচাই করে। Approval ও account operations পৃথক থাকে।
+- Batch editor: display order, explicit name editing, activation/deactivation এবং খালি inactive batch deletion। Referenced batches rename/delete করতে অস্বীকার করে; order-only update legacy batch name বদলায় না।
+- Content edit immutable ID দিয়ে update করে; key বদলালে primary-key conflict তৈরি হয় না। New record insert duplicate natural key overwrite না করে পরিষ্কার error দেখায়।
+- Avatar নিজের profiles.photo_url ব্যবহার করে; সফল profile save-এ state refresh হয়।
+- Central English/Bengali dictionary ও persisted language toggle। User-entered names/content/batch identifiers translate হয় না। Required labels-এ *, associated labels/placeholders এবং translated validation।
+- Safe notifications: raw SQL/RLS/schema/bucket errors public message-এ যায় না। Development diagnostics redact করে log করা হয়।
+- Upload validation দুই bucket-এর জন্য JPEG/PNG/WebP, সর্বোচ্চ ১০ MB। Public site-media এবং private batch-gallery আলাদা। নতুন Storage UPDATE বা site-media DELETE permission দেওয়া হয়নি।
+- Gallery deletion: DB delete ব্যর্থ হলে image delete হয় না। Storage cleanup ব্যর্থ হলে record আর public gallery-তে থাকে না, কিন্তু retained object-এর cleanup warning দেখায়। কোনো পুরোনো image স্বয়ংক্রিয় purge নেই।
+
+## পরিবর্তিত existing files
+
+- src/App.jsx — routing/state, section order, isolated details, admin forms/panels, translated interface, safe notifications এবং gallery/profile flows।
+- src/components/ContentFeatures.jsx — content identity-safe saving, About type, ১০ MB validation, translations ও stale-request protection।
+- src/main.jsx — LanguageProvider।
+- src/styles.css — balanced gradients, cards, rails, About fade, dashboard/mobile styles, required indicators।
+- package.json — expanded npm test command; নতুন runtime dependency নেই।
+- tests/content.test.mjs — existing tests-এর সঙ্গে About, pause duration ও language assertions।
+- supabase/migrations/20261117_content_features.sql — নতুন install-এর জন্য About kind এবং ১০ MB site-media setting। Existing ৫ MB bucket overwrite করে না; drift পেলে থামে।
+- supabase/migrations/20261117_gallery_guards.sql — is_admin reuse, canonical batch helper, repeatable trigger/policies, private bucket existence/privacy check, own-orphan cleanup guard।
+
+## নতুন files
+
+- src/lib/domain.js — shared normalization/order/image/phone validation, content/member writes এবং safe gallery deletion operations।
+- src/lib/navigation.js — coalesced history entries, Back/Forward ও URL route persistence।
+- src/lib/i18n.jsx, src/lib/translations.bn.json — maintainable language system ও form accessibility।
+- src/lib/notifications.js — user-safe messages ও diagnostic redaction।
+- src/components/Experience.jsx — reusable rails ও About fade slideshow।
+- src/components/BatchEditor.jsx — batch editing এবং explicit safe-delete UI।
+- supabase/migrations/20261119_ui_experience.sql — About kind extension, events visibility/order, batch order, uploader-name RPC, ১০ MB bucket configuration।
+- supabase/migrations/20261119_batch_actions.sql — admin-only reference check, inactive empty-batch delete RPC, profile-reference locking ও linked-name protection triggers। Installing the functions deletes no records; only an explicit authorised delete RPC can delete a batch row।
+- tests/domain.test.mjs — normalization, ordering, validation, member/content payloads, duplicate conflicts ও delete sequencing।
+- tests/structure.test.mjs — admin panel isolation ও member-edit navigation regression checks।
+- tests/experience-preview.html, tests/experience-preview.jsx — synthetic local-only fixture; কোনো Supabase client/write নেই।
+- UPGRADE_CHECKLIST.md, artifacts/smsa-home-desktop.jpg — progress record ও desktop visual verification।
+
+## Manual SQL review — প্রয়োগ করা হয়নি
+
+প্রথমে actual schema, public.is_admin(), grants, policies ও existing trigger names staging/SQL Editor-এ review করতে হবে। নতুন SQL নিজে থেকে চালানো হয়নি।
+
+Fresh setup-এর dependency order:
+
+1. 20261117_content_features.sql
+2. 20261117_gallery_guards.sql
+3. 20261119_ui_experience.sql
+4. 20261119_batch_actions.sql
+
+Existing setup-এ পুরোনো migration applied ধরে সব blind rerun করবেন না। বিশেষ করে site-media যদি ৫ MB হয়, revised content migration configuration mismatch দেখে থামবে। Existing content setup থাকলে gallery revision review করে, UI migration দিয়ে ১০ MB settings/About fields যোগ করুন; তারপর batch-actions migration review করুন। Content migration fresh foundation-এর জন্য; প্রয়োজনে rerun-এর আগে grants/constraints মিলিয়ে নিন।
+
+UI migration দুই bucket-এর file size/MIME settings বদলানোর SQL রাখে, কিন্তু public/private flag বদলায় না। এটি এখনো live-এ execute হয়নি। About kind CHECK-এর পরিচিত সংজ্ঞা ছাড়া custom constraint থাকলে script থামে, অনুমান করে সেটি মুছে না।
+
+Gallery script existing unrelated policies/grants বাদ দেয় না। Named restrictive guards reconcile করে; existing permissive read/upload/moderation policies এখনও প্রয়োজন। Own-folder orphan SELECT/DELETE gate failed-upload cleanup-এর জন্য; অন্যের referenced/private ছবি member-কে দেয় না। No Storage UPDATE grant। PostgreSQL 14+ CREATE OR REPLACE TRIGGER দরকার।
+
+Batch-actions migration existing RLS অক্ষত রাখে। Empty-batch delete SECURITY INVOKER হওয়ায় current DELETE policies এখনও প্রযোজ্য। Full reference check admin-gated SECURITY DEFINER; profile batch write SHARE lock-এর সঙ্গে parent-row deletion/name update coordinate করে। Existing custom triggers, FK cascades ও concurrent Storage/content creation-এর সঙ্গে staging review জরুরি। Storage/database operations distributed transaction নয়; orphan image retained থাকতে পারে।
+
+## করা পরীক্ষা এবং ফল
+
+- npm test — সব assertions পাস: legacy names, canonical matching, stable order, ১০ MB boundary/MIME, phone validation, safe errors, content key edit/create/conflict, member ID/allowlist/protected fields, gallery delete sequencing/partial cleanup, About grouping/order, ৭ সেকেন্ড pause calculation, language and panel structure।
+- npm run build — সফল।
+- git diff --check — শেষ formatting check-এ whitespace সংশোধিত।
+- PostgreSQL parser — চারটি migration-এর top-level SQL ও embedded policy/table DDL parse করা হয়েছে; SQL execute হয়নি। PL/pgSQL runtime ও actual schema resolution parser দিয়ে যাচাই হয় না।
+- Actual browser: public Home/About/Events; পৃথক Alumni list; পুরোনো batch cards/photos; Dakhil-2020 detail; Gallery→browser Back→same batch→Back→list; About anchor/active nav; login choice Back; বাংলা/English labels; user names unchanged; required-field বাংলা tooltip — দেখা হয়েছে।
+- Rail timing: manual action-এর পরে measured ১.৫ সেকেন্ডে movement delta ০; pause observation-এর পর মোট প্রায় ৭.১ সেকেন্ডে automatic movement resumed।
+- Synthetic About fixture: প্রায় ২.২ সেকেন্ডে image changed; CSS transition property opacity। এটি component test, production About records-এর end-to-end CRUD test নয়।
+- Mobile viewport 390: document width 375; horizontal document overflow পাওয়া যায়নি। Desktop screenshot artifacts/smsa-home-desktop.jpg।
+
+## এখনও যাচাই হয়নি / সীমাবদ্ধতা
+
+- বাস্তব authenticated login/signup/reset email, avatar upload, member edit/moderation, event/content/batch CRUD ও gallery upload/approval/rejection/delete live-এ করা হয়নি। Test credentials বা database permission review ছাড়া সেগুলো fully verified নয়।
+- নতুন migrations applied কি না নিশ্চিত নয়। Missing RPC/column হলে সংশ্লিষ্ট action friendly error দেখাবে। Uploader name RPC না থাকলে existing public_alumni names বা Member fallback ব্যবহৃত হয়। Actual uploader name guarantee করতে RPC ও public_alumni.id/full_name compatibility যাচাই করুন।
+- Existing public_alumni view-এর privacy, profiles/user_roles grants, is_admin definition, custom triggers, Storage permissive policies ও admin-manage-user Edge Function এখানে live-inspect করা হয়নি।
+- Admin member Approve/Reject controls existing approval_status column-এর approved/rejected values ধরে; actual enum/CHECK review করতে হবে।
+- Old image references সরালে Storage object retained থাকে। Cleanup automatic নয়। Public site-media URL disable/delete করলেই গোপন হয় না।
+- Public lists-এর existing Supabase row limits/pagination এবং production-scale performance আলাদা পরীক্ষা প্রয়োজন।
+- Browser-এ live committee data ছিল না; committee grouping automated/synthetic checks হয়েছে, real committee selection/data mutation নয়।
+
+## স্থানীয়ভাবে চালানো ও review
 
 ```powershell
 npm install
 npm run dev
 npm test
 npm run build
+git diff --check
+git diff
 ```
 
-Terminal যে Local URL দেখায় সেটি খুলুন। চলমান preview: http://127.0.0.1:5174/ । `.env`-এ আগের VITE_SUPABASE_URL ও VITE_SUPABASE_ANON_KEY ব্যবহার করুন। Secret/service-role key দেবেন না।
+Terminal-এর Local URL খুলুন। এই কাজের preview http://127.0.0.1:5175/ । Component fixture /tests/experience-preview.html শুধু স্থানীয় QA-এর জন্য। Build tests fixture-কে production entry হিসেবে bundle করে না।
 
-## Database setup — প্রয়োজনীয় বাহ্যিক ধাপ
-
-সম্পূর্ণ production schema/RLS এই checkout-এ নেই। Public API দিয়ে profiles.photo_url পাওয়া গেছে; নতুন event/history columns এবং site_content পাওয়া যায়নি।
-
-1. Supabase SQL Editor-এ আগে `supabase/inspect_schema.sql` চালিয়ে metadata পরীক্ষা করুন। এটি user rows নেয় না। Existing policy ও trigger-এর সঙ্গে নিচের migration মিলিয়ে নিন। সম্ভব হলে staging-এ আগে পরীক্ষা করুন।
-2. `supabase/migrations/20261117_content_features.sql` একবার চালান। এতে site_content, site-media public image bucket, events.image_url এবং committee history columns যুক্ত হয়। Existing rows মুছে না; পুরোনো committee current থাকে, admin পরে year সেট করবেন।
-3. Existing gallery policies/storage paths মিলিয়ে `supabase/migrations/20261117_gallery_guards.sql` একবার চালান। এতে approval limit trigger ও restrictive visibility/upload policies আছে। batch-gallery private না থাকলে পুরো transaction fail করবে।
-4. Scripts rerun করার জন্য নয়: table/function/policy name আগে থাকলে থামবে। Error হলে transaction rollback হবে; অনুমান করে existing object drop করবেন না।
-5. Existing public_alumni view-এ photo_url আছে এবং শুধু public fields ফেরত দেয় কি না যাচাই করুন। profiles/user_roles-এর private read policies, protected columns, এবং admin-manage-user Edge Function-এর role checks আলাদাভাবে review করতে হবে। Restrictive policies existing permissive policies-কে সীমিত করে; যেখানে existing allow policy নেই সেখানে স্বয়ংক্রিয় access দেয় না।
-6. site-media ছবি ইচ্ছাকৃতভাবে public: ব্যক্তিগত document দেবেন না। JPEG/PNG/WebP 5 MB পর্যন্ত। Individual uploads user-id folder-এ, admin content admin folder-এ যায়। Storage policy tests বাধ্যতামূলক। পুরোনো/অব্যবহৃত uploaded image স্বয়ংক্রিয় মুছে যায় না; references যাচাই করে cleanup করতে হবে।
-
-## নতুন ব্যবস্থাপনা
-
-- Top-right Login → Member/Admin। Login হলে profile dropdown: My Profile, Logout, admin-only dashboard।
-- Alumni dropdown-এর Alumni/Gallery; existing Dakhil batch cards ও batch filtering রক্ষিত। Batch profile নির্বাচিত batch-এর alumni list-এর ওপরে।
-- Admin → Website Content Management: official profile, batch profile, social links, carousel। Type নির্বাচন, content save; existing item Edit/Delete। Social links HTTPS, visibility স্বাধীন।
-- My Profile-এ ছবি upload করে Save Profile চাপুন।
-- Events form-এ ছবি upload এবং পুরোনো event CRUD। Homepage carousel-এর পর featured events।
-- Committee form-এ year/current flag/introduction/photo। Current checkbox বন্ধ করলে সেই বছরের history section-এ যায়।
-- Existing batch/account administration ও gallery moderation সংরক্ষিত।
-
-## বাস্তবে করা পরীক্ষা
-
-- Production build: সফল, duplicate-key warning সংশোধিত।
-- npm test: HTTPS URL validation, unsafe/disabled link suppression, history/current separation, hidden carousel — পাস।
-- Browser: logged-out public sections, Login choices, Admin form, Member form, Alumni submenu→Gallery, existing batch cards, featured event — দেখা হয়েছে।
-- Mobile viewport 390: document width 375; horizontal document overflow পাওয়া যায়নি। Sticky header ও touch-scrollable nav আছে।
-- Authenticated account, upload, content CRUD, approval concurrency, SQL/RLS execution, password recovery email, live carousel transitions: external configuration/test account ছাড়া end-to-end পরীক্ষা হয়নি। Missing site_content-এর কারণে additional content unavailable notice ও network 404 প্রত্যাশিত, setup সম্পন্ন হলে পুনরায় পরীক্ষা করুন।
-
-## GitHub-এর আগে
-
-`npm test`, `npm run build`, `git diff --check`, `git diff` চালিয়ে review করুন। `.env` ignored আছে নিশ্চিত করুন। Staging-এ admin/member/anonymous আলাদা session দিয়ে policy matrix পরীক্ষা করুন। Pending/rejected ছবি anonymous read এবং অন্য user-এর profile update প্রত্যাখ্যাত হতে হবে। নতুন schema apply ছাড়া নতুন CMS feature পুরোপুরি চলবে না। এই কাজ থেকে কোনো push বা deployment হয়নি।
+Push/deploy-এর আগে .env ignored ও untracked নিশ্চিত করুন, source diff ও SQL review করুন, তারপর staging-এ anonymous/member/admin তিনটি session দিয়ে permissions পরীক্ষা করুন। এই কাজ থেকে কোনো push/deploy হয়নি।
