@@ -1,7 +1,18 @@
 import assert from 'node:assert/strict';
 import {formatBatchName,batchUpdatePayload,compareDisplayOrder,validateImage,validatePhone,saveSiteContent,updateMemberProfile,deleteGalleryRecord} from '../src/lib/domain.js';
 import {friendlyMessage} from '../src/lib/notifications.js';
-import {normalizeRoute} from '../src/lib/navigation.js';
+import {normalizeRoute,routeFromHash,isHomepageRoute,activeHomepageSection,HOMEPAGE_SECTIONS} from '../src/lib/navigation.js';
+assert.deepEqual(HOMEPAGE_SECTIONS,['Home','About','Alumni','Committee','Events']);
+assert.equal(isHomepageRoute(normalizeRoute({page:'Committee'})),true);
+assert.equal(isHomepageRoute(normalizeRoute({page:'Alumni',batch:'Batch-20'})),false,'Batch detail stays separate from the homepage');
+assert.equal(routeFromHash('#committee').page,'Committee');
+assert.equal(routeFromHash('#alumni').page,'Alumni');
+assert.equal(routeFromHash('#'+encodeURIComponent(JSON.stringify({page:'Committee',committee:'2024'}))).committee,'2024','Existing shareable year route remains valid');
+assert.equal(routeFromHash('#%broken').page,'Home');
+assert.equal(normalizeRoute({page:'Committee',batch:'Batch-20'}).batch,null,'Stale batch selection must not turn homepage Alumni into a detail view');
+assert.equal(activeHomepageSection({Home:-1000,About:-600,Alumni:-300,Committee:80,Events:700},120),'Committee');
+assert.equal(activeHomepageSection({Home:-1000,About:-600,Alumni:-300,Committee:-100,Events:80},120),'Events','Navbar order cannot override physical section order');
+assert.equal(activeHomepageSection({Home:-1000,About:-600,Alumni:-300,Committee:-100,Events:400},120,true),'Events');
 assert.equal(normalizeRoute({page:'Admin'}).search,'','Partial history entries keep route defaults');
 assert.equal(normalizeRoute({page:'Alumni',search:{unsafe:true}}).search,'');
 assert.equal(normalizeRoute({page:'unknown'}).page,'Home');
@@ -22,6 +33,7 @@ assert.equal(calls[0][0],'update');assert.ok(!('id' in calls[0][1]));assert.ok(!
 calls.length=0;await saveSiteContent(client,{kind:'official',key:'wrong',title:'SMSA'});assert.equal(calls[0][0],'insert');assert.equal(calls[0][1].key,'smsa');
 const failed={from(){return {update(){return {eq(){return {select(){return {single:async()=>({error:{code:'23505',message:'duplicate key'}})}}}}}}}}};
 await assert.rejects(()=>saveSiteContent(failed,{id:'original',kind:'carousel',key:'taken'}),e=>e.code==='23505');
+assert.equal(friendlyMessage({code:'55P03',message:'lock unavailable'}),'Committee ordering is busy. Please try again.');
 console.log('PASS: legacy batch normalization, stable ordering, image/phone validation, safe errors, key-renaming identity, create and conflict handling');
 
 assert.deepEqual(batchUpdatePayload({name:'Batch-20'},'Dakhil-2020',3),{name:'Batch-20',display_order:3});
@@ -41,3 +53,5 @@ assert.deepEqual(deletionOrder,['row'],'Never delete an object if row deletion f
 const outcome=await deleteGalleryRecord(deleteClient(null,{code:'cleanup'}),{id:1,storage_path:'1/user/photo.png'});
 assert.deepEqual(deletionOrder,['row','object']);assert.equal(outcome.cleanupError.code,'cleanup');
 console.log('PASS: gallery delete ordering and explicit partial-cleanup result');
+
+await assert.rejects(()=>saveSiteContent(client,{kind:'unverified-kind',key:'x'}));

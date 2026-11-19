@@ -7,8 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node tests/domain.test.mjs && node tests/content.test.mjs && node tests/structure.test.mjs",
-    "test:browser": "node tests/redesign-browser.mjs",
+    "test": "node tests/domain.test.mjs && node tests/cms.test.mjs && node tests/committee.test.mjs && node tests/content.test.mjs && node tests/structure.test.mjs",
+    "test:browser": "node tests/browser-suite.mjs",
     "test:migrations": "node tests/migration-safety.test.mjs"
   },
   "dependencies": {

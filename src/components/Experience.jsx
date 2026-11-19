@@ -125,5 +125,5 @@ export function AboutSlideshow({
     return () => clearInterval(timer);
   }, [slides.length, paused, reducedMotion]);
   if (!slides.length) return null;
-  return <div className="about-slideshow" aria-label={t("About SMSA images")}>{slides.map((slide, i) => <figure key={slide.id} className={i === index % slides.length ? 'visible' : ''} aria-hidden={i !== index % slides.length}><img src={slide.image_url} alt={slide.title} /><figcaption>{slide.title}</figcaption></figure>)}<button className="slideshow-pause" onClick={() => setPaused(!paused)}>{paused ? t("Play") : t("Pause")}</button></div>;
+  return <div className={'about-slideshow' + (slides.length===1 ? ' single-slide' : '')} aria-label={t("About SMSA images")}>{slides.map((slide, i) => <figure key={slide.id} className={i === index % slides.length ? 'visible' : ''} aria-hidden={i !== index % slides.length}><img src={[index % slides.length,(index+1) % slides.length,(index+slides.length-1) % slides.length].includes(i) ? slide.image_url : undefined} alt={slide.title || t('About SMSA image')} />{slide.title && <figcaption>{slide.title}</figcaption>}</figure>)}{slides.length>1 && <button className="slideshow-pause" onClick={() => setPaused(!paused)}>{paused ? t("Play") : t("Pause")}</button>}</div>;
 }

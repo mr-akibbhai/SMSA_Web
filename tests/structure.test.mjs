@@ -9,3 +9,6 @@ traverse(ast,{JSXElement(path){const cls=path.node.openingElement.attributes.fin
 for(const [panel,operation] of [['batches','createBatch'],['gallery','reviewGalleryPhoto'],['members','adminUpdateMember'],['events','saveEvent'],['committee','saveCommittee']])assert.ok(panels.get(panel)?.includes(operation),panel+' must contain its management action');
 assert.ok(memberHandler,'Edit must navigate to the selected member editor');
 console.log('PASS: isolated admin panel ownership and member edit navigation');
+const sectionIds=[];
+traverse(ast,{JSXOpeningElement(path){if(path.node.name.name==='section'){const id=path.node.attributes.find(a=>a.name?.name==='id')?.value?.value;if(['home','about','alumni','committee','events'].includes(id))sectionIds.push(id);}}});
+assert.deepEqual(sectionIds,['home','about','alumni','committee','events'],'Homepage source keeps Alumni and independent Committee adjacent');

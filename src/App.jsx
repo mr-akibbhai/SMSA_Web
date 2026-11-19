@@ -1,10 +1,13 @@
 import { useLanguage } from "./lib/i18n";
 import { useEffect, useRef, useState, useId, lazy, Suspense } from "react";
-import { X, Users, GraduationCap, CalendarDays, ShieldCheck, LogIn, LogOut, UserCircle, ArrowRight, Heart, Search, Clock, MapPin, KeyRound, Trash2, Edit, Plus, Save, Ban, RefreshCw, ChevronLeft, Layers, Image, Upload, CheckCircle, XCircle } from "lucide-react";
+import { X, Users, GraduationCap, CalendarDays, ShieldCheck, LogIn, UserCircle, ArrowRight, Heart, Search, Clock, MapPin, KeyRound, Trash2, Edit, Plus, Save, Ban, RefreshCw, ChevronLeft, Layers, Image, Upload, CheckCircle, XCircle } from "lucide-react";
 import { supabase } from "./lib/supabase";
-import { useAppRoute } from "./lib/navigation";
+import { useAppRoute, HOMEPAGE_SECTIONS, isHomepageRoute, activeHomepageSection } from "./lib/navigation";
 import { LanguageToggle, FormAccessibility } from "./lib/i18n";
 import { friendlyMessage, logDiagnostic } from "./lib/notifications";
+import { saveRecord, deleteRecord, eventPayload, committeePayload, committeeYears, committeeForGroup, visibleGalleryRows, galleryInsert, resolveBatch, signedGalleryImages, REFRESH_WARNING } from './lib/cms';
+import { arrangedCommittee,DEFAULT_POSITIONS,readCommitteeLayouts,applyCommitteeRanks } from './lib/committee';
+import { committeeOrderingReady } from './lib/cms-capabilities';
 import BatchEditor from "./components/BatchEditor";
 import { AutoRail, AboutSlideshow } from "./components/Experience";
 import { formatBatchName, validateImage, validatePhone, updateMemberProfile, deleteGalleryRecord } from "./lib/domain";
@@ -14,6 +17,7 @@ const DashboardNavigation = managementComponent('DashboardNavigation');
 const DashboardOverview = managementComponent('DashboardOverview');
 const AboutManager = managementComponent('AboutManager');
 const SocialLinksManager = managementComponent('SocialLinksManager');
+const CommitteeOrdering = lazy(()=>import('./components/CommitteeOrdering'));
 const navItems = ["Home", "About", "Events", "Alumni", "Committee"];
 const emptyForm = {
   full_name: "",
@@ -47,6 +51,9 @@ export default function App() {
     t
   } = useLanguage();
   const content = useSiteContent();
+  const [homepageReady,setHomepageReady]=useState(false);
+  const [calendarYear,setCalendarYear]=useState(()=>new Date().getFullYear());
+  useEffect(()=>{const check=()=>setCalendarYear(new Date().getFullYear());const timer=setInterval(check,60000);window.addEventListener('focus',check);return ()=>{clearInterval(timer);window.removeEventListener('focus',check);};},[]);
   const accountLoad = useRef(0);
   const publicLoad = useRef(0);
   const accountUser = useRef(null);
@@ -54,6 +61,10 @@ export default function App() {
   const authAttempt = useRef(false);
   const [eventUploading, setEventUploading] = useState(false);
   const [committeeUploading, setCommitteeUploading] = useState(false);
+  const cmsWriteLock=useRef(false);
+  const uploadLock=useRef(false);
+  const currentGallery=useRef(null);
+  const moderationRequest=useRef(0);
   const [galleryFilter, setGalleryFilter] = useState("pending");
   const {
     route,
@@ -83,18 +94,15 @@ export default function App() {
   const [activeSection, setActiveSection] = useState("Home");
   const navbarRef = useRef(null);
   const navRef = useRef(null);
-  const scrollTarget = useRef(null);
-  const publicView = ["Home", "About", "Events"].includes(page) || (page === "Alumni" && !selectedBatch);
+  const scrollTarget = useRef(isHomepageRoute(route) ? page : null);
+  const publicView = isHomepageRoute(route);
   useEffect(() => {
-    let frame;
+    let frame,targetFrame;
     const update = () => {
       if (!publicView) return;
       const offset = (navbarRef.current?.offsetHeight || 80) + 24;
-      let current = "Home";
-      for (const name of navItems) {
-        if (document.getElementById(name.toLowerCase())?.getBoundingClientRect().top <= offset) current = name;
-      }
-      if (window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 2) current = "Alumni";
+      const tops=Object.fromEntries(HOMEPAGE_SECTIONS.map(name=>[name,document.getElementById(name.toLowerCase())?.getBoundingClientRect().top]));
+      const current=activeHomepageSection(tops,offset,window.scrollY+window.innerHeight>=document.documentElement.scrollHeight-2);
       setActiveSection(current);
     };
     const onScroll = () => {
@@ -110,8 +118,8 @@ export default function App() {
       passive: true
     });
     window.addEventListener("resize", onScroll);
-    frame = requestAnimationFrame(() => {
-      if (scrollTarget.current) {
+    targetFrame = requestAnimationFrame(() => {
+      if (scrollTarget.current && homepageReady && content.ready) {
         document.getElementById(scrollTarget.current.toLowerCase())?.scrollIntoView({
           behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth"
         });
@@ -121,11 +129,12 @@ export default function App() {
     });
     return () => {
       cancelAnimationFrame(frame);
+      cancelAnimationFrame(targetFrame);
       resize.disconnect();
       window.removeEventListener("scroll", onScroll);
       window.removeEventListener("resize", onScroll);
     };
-  }, [publicView, page]);
+  }, [publicView, page, route.committee, homepageReady, content.ready]);
   useEffect(() => {
     const nav = navRef.current;
     const item = nav?.querySelector('[aria-current="location"]');
@@ -163,22 +172,38 @@ export default function App() {
   const [alumni, setAlumni] = useState([]);
   const [events, setEvents] = useState([]);
   const [committee, setCommittee] = useState([]);
+  const [committeeLayouts,setCommitteeLayouts]=useState([]);
+  const [orderingAvailable,setOrderingAvailable]=useState(false);
+  useEffect(()=>{
+    if(!committeeOrderingReady || !(publicView || page==='Admin' && route.panel==='committee'))return;
+    let active=true;
+    setOrderingAvailable(false);
+    readCommitteeLayouts(supabase).then(layouts=>{if(active){setCommitteeLayouts(layouts);setOrderingAvailable(true);}}).catch(error=>{if(active)setOrderingAvailable(false);logDiagnostic(error);});
+    return ()=>{active=false;};
+  },[publicView,page,route.panel,route.committee,session?.user?.id]);
   const [members, setMembers] = useState([]);
 
   // BATCH SYSTEM
   const [batches, setBatches] = useState([]);
-  const galleryBatch = batches.find(b => gallerySelection && (String(b.id) === String(gallerySelection.id) || formatBatchName(b.name) === formatBatchName(gallerySelection.name))) || (gallerySelection?.id ? gallerySelection : null);
+  const galleryBatch = resolveBatch(batches, page === 'Alumni' && selectedBatch ? {name:selectedBatch} : gallerySelection);
   const [batchYear, setBatchYear] = useState("");
   const [batchLoading, setBatchLoading] = useState(false);
   const [showBatchForm, setShowBatchForm] = useState(false);
 
   // BATCH GALLERY
   const galleryRequest = useRef(0);
+  const signedGalleryCache=useRef(new Map());
   const [galleryPhotos, setGalleryPhotos] = useState([]);
   const [pendingGallery, setPendingGallery] = useState([]);
   const [galleryLoading, setGalleryLoading] = useState(false);
   const [galleryUploading, setGalleryUploading] = useState(false);
   const [galleryFile, setGalleryFile] = useState(null);
+  const [galleryPreview,setGalleryPreview]=useState('');
+  useEffect(()=>{
+    if(!galleryFile || validateImage(galleryFile)){setGalleryPreview('');return;}
+    const url=URL.createObjectURL(galleryFile);setGalleryPreview(url);
+    return ()=>URL.revokeObjectURL(url);
+  },[galleryFile]);
   const [galleryCaption, setGalleryCaption] = useState("");
   const [form, setForm] = useState(emptyForm);
   const [editingMember, setEditingMember] = useState(null);
@@ -186,12 +211,22 @@ export default function App() {
   const [editingCommittee, setEditingCommittee] = useState(null);
   const [eventForm, setEventForm] = useState(emptyEventForm);
   const [committeeForm, setCommitteeForm] = useState(emptyCommitteeForm);
+  useEffect(()=>{
+    if(!editingCommittee && /^\d{4}$/.test(route.committee || '')){
+      const year=Number(route.committee);
+      setCommitteeForm(d=>({...d,committee_year:year,is_current:year===calendarYear ? d.is_current : false}));
+    }
+  },[route.committee,editingCommittee,calendarYear]);
+  currentGallery.current={batchId:galleryBatch?.id,userId:session?.user?.id,admin:isAdmin};
+  useEffect(()=>{signedGalleryCache.current=new Map();},[session?.user?.id,isAdmin]);
   useEffect(() => {
-    if (galleryBatch?.id) loadGalleryPhotos(galleryBatch.id);
-    return () => {
-      galleryRequest.current++;
-    };
-  }, [galleryBatch?.id, session?.user?.id]);
+    setGalleryPhotos([]);setGalleryFile(null);setGalleryCaption('');
+    const refresh=()=>{if(galleryBatch?.id && !document.hidden)loadGalleryPhotos(galleryBatch.id);};
+    refresh();
+    const timer=setInterval(refresh,15000);
+    window.addEventListener('focus',refresh);document.addEventListener('visibilitychange',refresh);
+    return ()=>{galleryRequest.current++;clearInterval(timer);window.removeEventListener('focus',refresh);document.removeEventListener('visibilitychange',refresh);};
+  },[galleryBatch?.id,session?.user?.id,isAdmin]);
   useEffect(() => {
     const close = e => {
       if (e.type === 'keydown' && e.key !== 'Escape') return;
@@ -218,6 +253,7 @@ export default function App() {
   useEffect(() => {
     if (!supabase) {
       setLoading(false);
+      setHomepageReady(true);
       setMessage("Supabase configuration is missing.");
       return;
     }
@@ -228,7 +264,7 @@ export default function App() {
         data,
         error
       } = await supabase.auth.getSession();
-      if (error) setMessage(error.message);
+      if (error) setMessage(error);
       if (mounted && epoch === authEpoch.current && data?.session) {
         setSession(data.session);
         await loadAccount(data.session.user);
@@ -237,12 +273,14 @@ export default function App() {
       }
       if (mounted) {
         await Promise.all([loadPublicData(), loadBatches()]);
+        if(mounted)setHomepageReady(true);
       }
     }
     initialize().catch(error => {
       if (mounted) {
-        setMessage(error.message);
+        setMessage(error);
         setLoading(false);
+        setHomepageReady(true);
       }
     });
     const {
@@ -286,26 +324,27 @@ export default function App() {
   }, []);
 
   // PUBLIC DATA
-  async function loadPublicData() {
+  async function loadPublicData(strict=false) {
     if (!supabase) return;
     const request = ++publicLoad.current;
     const [a, e, c] = await Promise.all([supabase.from("public_alumni").select("*"), supabase.from("events").select("*").order("event_date"), supabase.from("committee_members").select("*").order("name")]);
     if (request !== publicLoad.current) return;
     if (a.error) {
-      console.error("Alumni Loading Error:", a.error);
+      logDiagnostic(a.error);
     } else {
       setAlumni(a.data || []);
     }
     if (e.error) {
-      console.error("Events Loading Error:", e.error);
+      logDiagnostic(e.error);
     } else {
       setEvents(e.data || []);
     }
     if (c.error) {
-      console.error("Committee Loading Error:", c.error);
+      logDiagnostic(c.error);
     } else {
       setCommittee(c.data || []);
     }
+    if(strict==='events' && e.error || strict==='committee_members' && c.error)throw new Error(REFRESH_WARNING);
   }
   // LOAD BATCHES
   async function loadBatches() {
@@ -328,22 +367,14 @@ export default function App() {
   }
 
   // CREATE SIGNED URLS FOR PRIVATE GALLERY IMAGES
-  async function addGalleryImageUrls(photos) {
-    return Promise.all((photos || []).map(async photo => {
-      const {
-        data,
-        error
-      } = await supabase.storage.from("batch-gallery").createSignedUrl(photo.storage_path, 3600);
-      return {
-        ...photo,
-        image_url: error ? null : data?.signedUrl || null
-      };
-    }));
+  async function addGalleryImageUrls(photos,viewer=currentGallery.current) {
+    return signedGalleryImages(supabase,photos || [],signedGalleryCache.current,JSON.stringify([viewer?.userId || 'public',Boolean(viewer?.admin)]));
   }
 
   // LOAD GALLERY PHOTOS
   async function loadGalleryPhotos(batchId) {
-    if (!supabase || !batchId) return;
+    if (!supabase || !batchId || String(currentGallery.current?.batchId)!==String(batchId)) return;
+    const identity={...currentGallery.current};
     const requestId = ++galleryRequest.current;
     setGalleryLoading(true);
     try {
@@ -354,7 +385,7 @@ export default function App() {
         ascending: false
       });
       if (error) throw error;
-      let enriched = data || [];
+      let enriched = visibleGalleryRows(data || [],batchId,identity.userId,identity.admin);
       if (enriched.length) {
         const names = await supabase.rpc('smsa_gallery_uploader_names', {
           photo_ids: enriched.map(photo => String(photo.id))
@@ -364,10 +395,10 @@ export default function App() {
           uploader_name: names.data?.find(n => n.photo_id === String(photo.id))?.full_name
         }));
       }
-      const photos = await addGalleryImageUrls(enriched);
-      if (requestId === galleryRequest.current) setGalleryPhotos(photos);
+      const photos = await addGalleryImageUrls(enriched,identity);
+      if (requestId === galleryRequest.current && String(currentGallery.current?.batchId)===String(batchId) && currentGallery.current?.userId===identity.userId) setGalleryPhotos(photos);
     } catch (error) {
-      setMessage("Gallery loading failed: " + error.message);
+      if(requestId === galleryRequest.current)setMessage("Gallery loading failed: " + error.message);
     } finally {
       if (requestId === galleryRequest.current) setGalleryLoading(false);
     }
@@ -377,6 +408,7 @@ export default function App() {
   async function loadPendingGallery(adminAccess = isAdmin) {
     if (!supabase || !adminAccess) return;
     const request = accountLoad.current;
+    const sequence=++moderationRequest.current;
     try {
       const {
         data,
@@ -385,8 +417,8 @@ export default function App() {
         ascending: false
       });
       if (error) throw error;
-      const photos = await addGalleryImageUrls(data || []);
-      if (request === accountLoad.current) setPendingGallery(photos);
+      const photos = await addGalleryImageUrls(data || [],{userId:currentGallery.current?.userId,admin:true});
+      if (request === accountLoad.current && sequence===moderationRequest.current) setPendingGallery(photos);
     } catch (error) {
       setMessage("Pending gallery loading failed: " + error.message);
     }
@@ -395,6 +427,7 @@ export default function App() {
   // UPLOAD GALLERY PHOTO
   async function uploadGalleryPhoto(e) {
     e.preventDefault();
+    if(uploadLock.current)return;
     if (!session || !profile) {
       setMessage("Please login first.");
       return;
@@ -416,6 +449,7 @@ export default function App() {
       setMessage("Maximum image size is 10 MB.");
       return;
     }
+    uploadLock.current=true;
     setGalleryUploading(true);
     setMessage("");
     let storagePath = null;
@@ -444,17 +478,16 @@ export default function App() {
       if (uploadError) throw uploadError;
       currentStage = "Saving photo information to gallery_photos";
       const {
-        error: insertError
-      } = await supabase.from("gallery_photos").insert({
-        batch_id: galleryBatch.id,
-        uploader_id: session.user.id,
-        storage_path: storagePath,
-        caption: galleryCaption.trim() || null,
-        status: "pending"
-      });
-      if (insertError) {
-        await supabase.storage.from("batch-gallery").remove([storagePath]);
-        throw insertError;
+        data: insertedPhoto,error: insertError
+      } = await supabase.from("gallery_photos").insert(galleryInsert(ownBatch,profile,session.user.id,storagePath,galleryCaption)).select('id').single();
+      if (insertError || !insertedPhoto) {
+        // An uncertain network/RETURNING failure may follow a committed insert.
+        // Clean up only when PostgreSQL explicitly rejected the transaction.
+        if(['23503','23505','23514','42501'].includes(insertError?.code)){
+          try {const cleanup=await supabase.storage.from('batch-gallery').remove([storagePath]);if(cleanup.error)logDiagnostic(cleanup.error);}catch(error){logDiagnostic(error);}
+          throw insertError;
+        }
+        throw new Error('Could not confirm the photo record. Reload this gallery before trying again.');
       }
       currentStage = "Refreshing gallery";
       setGalleryFile(null);
@@ -464,39 +497,35 @@ export default function App() {
       setMessage("Photo submitted successfully. Waiting for Admin approval.");
       await loadGalleryPhotos(galleryBatch.id);
     } catch (error) {
-      setMessage(`Photo upload failed at [${currentStage}]: ${error.message}`);
+      logDiagnostic({code:error.code,message:currentStage+": "+error.message});setMessage(error);
     } finally {
+      uploadLock.current=false;
       setGalleryUploading(false);
     }
   }
 
   // ADMIN APPROVE / REJECT PHOTO
   async function reviewGalleryPhoto(photoId, status) {
-    if (!isAdmin || !session || authLoading) return;
-    setAuthLoading(true);
+    if (!isAdmin || !session || !beginCmsWrite()) return;
     try {
-      const {
-        error
-      } = await supabase.from("gallery_photos").update({
+      await saveRecord(supabase,"gallery_photos",{
         status,
         reviewed_at: new Date().toISOString(),
         reviewed_by: session.user.id
-      }).eq("id", photoId);
-      if (error) throw error;
+      },photoId);
       setMessage(status === "approved" ? "Photo approved successfully." : "Photo rejected successfully.");
       await Promise.all([loadPendingGallery(true), galleryBatch ? loadGalleryPhotos(galleryBatch.id) : Promise.resolve()]);
     } catch (error) {
-      setMessage("Photo review failed: " + error.message);
+      logDiagnostic(error);setMessage(error);
     } finally {
-      setAuthLoading(false);
+      endCmsWrite();
     }
   }
 
   // ADMIN DELETE PHOTO
   async function deleteGalleryPhoto(photo) {
     if (!isAdmin || authLoading) return;
-    if (!window.confirm(t('Permanently delete this photo?'))) return;
-    setAuthLoading(true);
+    if (!window.confirm(t('Permanently delete this photo?')) || !beginCmsWrite()) return;
     try {
       // Remove the gallery reference first: a Storage failure must not leave a broken public card.
       const {
@@ -508,9 +537,9 @@ export default function App() {
       } else setMessage('Photo deleted successfully.');
       await Promise.all([loadPendingGallery(true), galleryBatch ? loadGalleryPhotos(galleryBatch.id) : Promise.resolve()]);
     } catch (error) {
-      setMessage(error.message);
+      setMessage(error);
     } finally {
-      setAuthLoading(false);
+      endCmsWrite();
     }
   }
 
@@ -576,6 +605,10 @@ export default function App() {
   }
 
   // NAVIGATION
+  function selectCommittee(committee){
+    scrollTarget.current="Committee";
+    go({page:"Committee",committee,batch:null,gallery:null});
+  }
   function navigate(name) {
     if (name === "Admin" && !isAdmin) {
       setMessage("Admin access required.");
@@ -804,7 +837,7 @@ export default function App() {
       if (error) throw error;
       setMessage("Password reset link sent. Check your email.");
     } catch (error) {
-      setMessage(error.message);
+      setMessage(error);
     } finally {
       setAuthLoading(false);
     }
@@ -841,7 +874,7 @@ export default function App() {
         setPage("Login");
       }
     } catch (error) {
-      setMessage(error.message);
+      setMessage(error);
     } finally {
       setAuthLoading(false);
     }
@@ -985,7 +1018,7 @@ export default function App() {
       await loadPublicData();
       if (editingMember.id === session?.user.id) await loadAccount(session.user);
     } catch (error) {
-      setMessage(error.message);
+      setMessage(error);
     } finally {
       setAuthLoading(false);
     }
@@ -1004,7 +1037,7 @@ export default function App() {
       await loadPublicData();
       setMessage('Your changes have been saved.');
     } catch (error) {
-      setMessage(error.message);
+      setMessage(error);
     } finally {
       setAuthLoading(false);
     }
@@ -1021,7 +1054,7 @@ export default function App() {
       error
     } = await supabase.from("profiles").delete().eq("id", userId);
     if (error) {
-      setMessage(error.message);
+      setMessage(error);
     } else {
       setMessage("Profile data deleted. Auth account still exists.");
       await loadAdminData();
@@ -1057,78 +1090,57 @@ export default function App() {
     }
   }
 
-  // ADMIN: EVENTS
+  function beginCmsWrite() {
+    if(!isAdmin || !session || cmsWriteLock.current || authLoading)return false;
+    cmsWriteLock.current=true;setAuthLoading(true);setMessage('');return true;
+  }
+  function endCmsWrite(){cmsWriteLock.current=false;setAuthLoading(false);}
+  // Confirm an affected row before reporting success; refresh failure never turns an insert into a retry insert.
   async function saveEvent(e) {
-    e.preventDefault();
-    if (!isAdmin || authLoading || eventUploading) return;
-    setAuthLoading(true);
+    e.preventDefault();if(eventUploading || !beginCmsWrite())return;
     try {
-      const eventData = {
-        ...eventForm,
-        event_date: eventForm.event_date || null
-      };
-      const query = editingEvent ? supabase.from("events").update(eventData).eq("id", editingEvent) : supabase.from("events").insert(eventData);
-      const {
-        error
-      } = await query;
-      if (error) throw error;
-      setEventForm(emptyEventForm);
-      setEditingEvent(null);
-      setMessage("Event saved.");
-      await loadPublicData();
-    } catch (error) {
-      setMessage(error.message);
-    } finally {
-      setAuthLoading(false);
-    }
+      const saved=await saveRecord(supabase,'events',eventPayload(eventForm),editingEvent);
+      setEditingEvent(saved.id);
+      await loadPublicData('events');
+      setEventForm(emptyEventForm);setEditingEvent(null);setMessage('Event saved.');
+    } catch(error){logDiagnostic(error);setMessage(error);}
+    finally{endCmsWrite();}
   }
   async function deleteEvent(id) {
-    if (authLoading || eventUploading) return;
-    if (!isAdmin || !window.confirm(t("Delete this event?"))) return;
-    const {
-      error
-    } = await supabase.from("events").delete().eq("id", id);
-    if (error) {
-      setMessage(error.message);
-    } else {
-      setMessage("Event deleted.");
-      await loadPublicData();
-    }
-  }
-
-  // ADMIN: COMMITTEE
-  async function saveCommittee(e) {
-    e.preventDefault();
-    if (!isAdmin || authLoading || committeeUploading) return;
-    setAuthLoading(true);
+    if(eventUploading || !isAdmin || cmsWriteLock.current || !window.confirm(t('Delete this event?')) || !beginCmsWrite())return;
     try {
-      const query = editingCommittee ? supabase.from("committee_members").update(committeeForm).eq("id", editingCommittee) : supabase.from("committee_members").insert(committeeForm);
-      const {
-        error
-      } = await query;
-      if (error) throw error;
-      setCommitteeForm(emptyCommitteeForm);
-      setEditingCommittee(null);
-      setMessage("Committee member saved.");
-      await loadPublicData();
-    } catch (error) {
-      setMessage(error.message);
-    } finally {
-      setAuthLoading(false);
-    }
+      await deleteRecord(supabase,'events',id);
+      if(editingEvent===id){setEditingEvent(null);setEventForm(emptyEventForm);}
+      await loadPublicData('events');setMessage('Event deleted.');
+    } catch(error){logDiagnostic(error);setMessage(error);}
+    finally{endCmsWrite();}
+  }
+  async function saveCommittee(e) {
+    e.preventDefault();if(committeeUploading || !beginCmsWrite())return;
+    try {
+      const payload=committeePayload(committeeForm);
+      const saved=await saveRecord(supabase,'committee_members',payload,editingCommittee);
+      setEditingCommittee(saved.id);
+      await loadPublicData('committee_members');
+      setCommitteeForm({...emptyCommitteeForm,committee_year:payload.committee_year ?? '',is_current:payload.is_current});
+      setEditingCommittee(null);setMessage('Committee member saved.');
+    } catch(error){logDiagnostic(error);setMessage(error);}
+    finally{endCmsWrite();}
   }
   async function deleteCommittee(id) {
-    if (authLoading || committeeUploading) return;
-    if (!isAdmin || !window.confirm(t("Delete this committee member?"))) return;
-    const {
-      error
-    } = await supabase.from("committee_members").delete().eq("id", id);
-    if (error) {
-      setMessage(error.message);
-    } else {
-      setMessage("Committee member deleted.");
-      await loadPublicData();
-    }
+    if(committeeUploading || !isAdmin || cmsWriteLock.current || !window.confirm(t('Delete this committee member?')) || !beginCmsWrite())return;
+    try {
+      await deleteRecord(supabase,'committee_members',id);
+      if(editingCommittee===id){setEditingCommittee(null);setCommitteeForm(emptyCommitteeForm);}
+      await loadPublicData('committee_members');setMessage('Committee member deleted.');
+    } catch(error){logDiagnostic(error);setMessage(error);}
+    finally{endCmsWrite();}
+  }
+  function prepareCommitteeYear(){
+    const next=Math.max(calendarYear,...committeeArchiveYears)+1;
+    if(next>2200)return;
+    setEditingCommittee(null);setCommitteeForm({...emptyCommitteeForm,committee_year:next,is_current:false});
+    go({committee:String(next)});setMessage('Year selected. Add a verified member to publish this committee year.');
   }
 
   // LOGOUT
@@ -1138,7 +1150,7 @@ export default function App() {
       error
     } = await supabase.auth.signOut();
     if (error) {
-      setMessage(error.message);
+      setMessage(error);
       return;
     }
     setSession(null);
@@ -1160,7 +1172,8 @@ export default function App() {
   }
 
   // BATCH NAMES: DAKHIL-2006 TO CURRENT YEAR
-  const currentYear = new Date().getFullYear();
+  const committeeArchiveYears=committeeYears([...committee,...committeeLayouts.map(layout=>({committee_year:layout.year}))],calendarYear,route.committee);
+  const currentYear = calendarYear;
   const generatedBatchNames = Array.from({
     length: Math.max(0, currentYear - 2005)
   }, (_, index) => `Dakhil-${2006 + index}`);
@@ -1256,35 +1269,8 @@ export default function App() {
 
         {/* ABOUT */}
         {publicView && <section id="about" className="page-section container">
-            <PageHeading label={t("ABOUT SMSA")} title={content.items.find(i => i.kind === 'about' && i.key === 'story' && i.enabled)?.title || t("Our Story")} />
             {content.error && <div role="status"><p>{t(content.error)}</p><button className="btn-outline" onClick={content.reload}>{t('Retry additional content')}</button></div>}
-            <div className="about-layout"><div className="about-copy"><span className="eyebrow">{t('TOGETHER ACROSS GENERATIONS')}</span><h2>{t('Same Mind Student Association')}</h2><p className="preserve-lines">{content.items.find(i => i.kind === 'about' && i.key === 'story' && i.enabled)?.description || content.items.find(i => i.kind === 'official' && i.enabled)?.description || t('SMSA is an alumni community for former students of Sakhipur Thana Sadar Dakhil Madrasah. Our purpose is to maintain lifelong connections, bring former classmates together, and create opportunities to support one another.')}</p><p>{t('No matter when we graduated or where life has taken us, we share a common history and a lasting connection.')}</p></div><AboutSlideshow items={content.items} /></div>
-          </section>}
-
-        {/* EVENTS */}
-        {publicView && <section id="events" className="page-section container">
-            <PageHeading label={t("STAY CONNECTED")} title={t("Events & Announcements")} />
-
-            <div className="event-grid">
-              {events.filter(event => event.enabled !== false).map(event => <article className="event-card" key={event.id}>
-                  <div className="event-icon">
-                    <CalendarDays size={28} />
-                  </div>
-
-                  {event.image_url && <img className="event-image" src={event.image_url} alt={event.title} />}<h3>{event.title}</h3>
-                  <p>{event.description}</p>
-
-                  {event.event_date && <span>
-                      <Clock size={15} /> {event.event_date}
-                    </span>}
-
-                  {event.location && <span>
-                      <MapPin size={15} /> {event.location}
-                    </span>}
-                </article>)}
-
-              {events.filter(event => event.enabled !== false).length === 0 && <p className="empty-state">{t("No events have been published yet.")}</p>}
-            </div>
+            <div className="about-layout"><div className="about-copy">{content.items.find(i=>i.kind==='about' && i.key==='story' && i.enabled)?.title && <h2>{content.items.find(i=>i.kind==='about' && i.key==='story' && i.enabled).title}</h2>}{content.items.find(i=>i.kind==='about' && i.key==='story' && i.enabled)?.description && <p className="preserve-lines">{content.items.find(i=>i.kind==='about' && i.key==='story' && i.enabled).description}</p>}</div><AboutSlideshow items={content.items}/></div>
           </section>}
 
         {/* ALUMNI */}
@@ -1339,11 +1325,7 @@ export default function App() {
               setMessage('This batch gallery is not available yet.');
               return;
             }
-            go({
-              page: 'Gallery',
-              gallery: batch,
-              batch: selectedBatch
-            });
+            document.getElementById('gallery')?.scrollIntoView({behavior:window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
           }}><Image size={20} />{t("Batch Gallery")}</button>
                   <p className="preserve-lines">{content.items.find(i => i.kind === 'batch' && formatBatchName(i.key) === formatBatchName(selectedBatch) && i.enabled)?.description}</p>
                 <div className="search-box">
@@ -1389,8 +1371,50 @@ export default function App() {
               </AutoRail>}
           </section>}
 
+        {/* COMMITTEE */}
+        {publicView && <section id="committee" className="page-section container">
+            <PageHeading label={t("LEADERSHIP")} title={t("Our Executive Committee")} />
+
+            <p className="archive-explanation">{t('Year cards are an archive index. An empty year does not confirm that a committee existed.')}</p>
+            {!route.committee ? <AutoRail label={t('Committee years')}>
+              <button className="batch-card" onClick={()=>selectCommittee('current')}><ShieldCheck size={35}/><h3>{t('Current Committee')}</h3><p>{committeeForGroup(committee,'current').length} {t('Verified member records')}</p></button>
+              {committeeArchiveYears.map(year=><button className="batch-card" key={year} onClick={()=>selectCommittee(String(year))}><CalendarDays size={32}/><h3>{t('Committee of')} {year}</h3>{committeeForGroup(committee,year).some(member=>member.is_current!==false) && <small>{t('Current Committee')}</small>}{committeeForGroup(committee,year).some(member=>member.is_current===false) && <small>{t('Previous Committee')}</small>}<p>{committeeForGroup(committee,year).length ? committeeForGroup(committee,year).length+' '+t('Verified member records') : t('No verified records yet')}</p></button>)}
+              {committee.some(m=>!m.committee_year) && <button className="batch-card" onClick={()=>selectCommittee('undated')}><h3>{t('Year not recorded')}</h3></button>}
+            </AutoRail> : <><button className="btn-outline" onClick={()=>selectCommittee(null)}>{t('Back')}</button><h2>{route.committee==='current' ? t('Current Committee') : route.committee==='undated' ? t('Year not recorded') : t('Committee of')+' '+route.committee}</h2>
+              <div className="committee-grid">{arrangedCommittee(committeeForGroup(committee,route.committee),committeeLayouts).map(m=><article className="committee-card" key={m.id}>{m.photo_url && <img className="image-preview" src={m.photo_url} alt={m.name}/>}<h3>{m.name}</h3><strong>{m.position}</strong><p>{formatBatchName(m.batch)}</p><p className="preserve-lines">{m.introduction}</p><small>{m.committee_year || t('Year not recorded')} · {t(m.is_current!==false ? 'Current Committee' : 'Previous Committee')}</small></article>)}</div>
+              {!committeeForGroup(committee,route.committee).length && <p className="empty-state">{t('No verified committee records are available for this year.')}</p>}
+            </>}
+
+          </section>}
+
+        {/* EVENTS */}
+        {publicView && <section id="events" className="page-section container">
+            <PageHeading label={t("STAY CONNECTED")} title={t("Events & Announcements")} />
+
+            <div className="event-grid">
+              {events.filter(event => event.enabled !== false).map(event => <article className="event-card" key={event.id}>
+                  <div className="event-icon">
+                    <CalendarDays size={28} />
+                  </div>
+
+                  {event.image_url && <img className="event-image" src={event.image_url} alt={event.title || t("Event image")} />}{event.title && <h3>{event.title}</h3>}
+                  {event.description && <p>{event.description}</p>}
+
+                  {event.event_date && <span>
+                      <Clock size={15} /> {event.event_date}
+                    </span>}
+
+                  {event.location && <span>
+                      <MapPin size={15} /> {event.location}
+                    </span>}
+                </article>)}
+
+              {events.filter(event => event.enabled !== false).length === 0 && <p className="empty-state">{t("No events have been published yet.")}</p>}
+            </div>
+          </section>}
+
         {/* BATCH GALLERY */}
-        {page === "Gallery" && <section id="gallery" className="page-section container">
+        {(page === "Gallery" || page === "Alumni" && selectedBatch && galleryBatch) && <section id="gallery" className="page-section container">
             <PageHeading label={t("MEMORIES TOGETHER")} title={galleryBatch ? `${formatBatchName(galleryBatch.name)} ${t("Gallery")}` : t("Batch Gallery")} />
 
             {!galleryBatch ? <>
@@ -1429,6 +1453,7 @@ export default function App() {
                       <form onSubmit={uploadGalleryPhoto}>
                         <label>{t("Select Photo")}</label>
                         <input id="gallery-file-input" type="file" accept="image/jpeg,image/png,image/webp" required onChange={e => setGalleryFile(e.target.files?.[0] || null)} />
+                        {galleryPreview && <img className="gallery-upload-preview" src={galleryPreview} alt={t('Selected gallery photo preview')}/>}
 
                         <label>{t("Caption (Optional)")}</label>
                         <input type="text" value={galleryCaption} maxLength={200} placeholder={t("Write a caption for your photo...")} onChange={e => setGalleryCaption(e.target.value)} />
@@ -1451,7 +1476,7 @@ export default function App() {
                     </div>}
 
                 <div className="gallery-grid">
-                  {galleryLoading ? <p className="empty-state">{t("Loading photos...")}</p> : galleryPhotos.filter(photo => photo.status === "approved" || photo.uploader_id === session?.user?.id || isAdmin).map(photo => <article className="gallery-card" key={photo.id}>
+                  {galleryLoading ? <p className="empty-state">{t("Loading photos...")}</p> : visibleGalleryRows(galleryPhotos,galleryBatch?.id,session?.user?.id,isAdmin).map(photo => <article className="gallery-card" key={photo.id}>
                           {photo.image_url ? <img className="gallery-image" src={photo.image_url} alt={photo.caption || t("Batch memory")} /> : <div className="gallery-image gallery-image-empty">
                               <Image size={35} />
                               <span>{t("Image unavailable")}</span>
@@ -1479,19 +1504,9 @@ export default function App() {
                           </div>
                         </article>)}
 
-                  {!galleryLoading && galleryPhotos.filter(photo => photo.status === "approved" || photo.uploader_id === session?.user?.id || isAdmin).length === 0 && <p className="empty-state">{t("No approved photos in this batch yet.")}</p>}
+                  {!galleryLoading && visibleGalleryRows(galleryPhotos,galleryBatch?.id,session?.user?.id,isAdmin).length === 0 && <p className="empty-state">{t("No approved photos in this batch yet.")}</p>}
                 </div>
               </>}
-          </section>}
-
-        {/* COMMITTEE */}
-        {page === "Committee" && <section id="committee" className="page-section container">
-            <PageHeading label={t("LEADERSHIP")} title={t("Our Executive Committee")} />
-
-            {committee.length === 0 && <p className="empty-state">{t("Committee information will be published here.")}</p>}{!route.committee ? <AutoRail label={t("Committee groups")}>{[...new Set(committee.map(m => m.is_current !== false ? 'current' : String(m.committee_year)).filter(y => y !== 'null' && y !== 'undefined'))].map(group => <button className="batch-card" key={group} onClick={() => go({
-            committee: group
-          })}><ShieldCheck size={35} /><h3>{group === 'current' ? t("Current Committee") : t('Committee of') + ' ' + group}</h3><p>{t("View committee members")}</p></button>)}</AutoRail> : <><button className="btn-outline" onClick={back}>{t("Back")}</button><h2>{route.committee === 'current' ? t("Current Committee") : t('Committee of') + ' ' + route.committee}</h2><div className="committee-grid">{committee.filter(m => route.committee === 'current' ? m.is_current !== false : m.is_current === false && String(m.committee_year) === route.committee).map(m => <article className="committee-card" key={m.id}>{m.photo_url && <img className="image-preview" src={m.photo_url} alt={m.name} />}<h3>{m.name}</h3><strong>{m.position}</strong><p>{m.batch}</p><p>{m.introduction}</p><small>{m.committee_year}</small></article>)}</div></>}
-
           </section>}
 
         {/* LOGIN AND REGISTRATION */}
@@ -1941,7 +1956,7 @@ export default function App() {
                   image_url
                 }))} />{eventForm.image_url && <><img className="image-preview" src={eventForm.image_url} alt={t("Event preview")} /><button type="button" className="btn-outline" onClick={() => setEventForm(d => ({...d,image_url:""}))}>{t("Remove image")}</button></>}
                     <label>{t("Event Title")}</label>
-                    <input required value={eventForm.title} onChange={e => setEventForm({
+                    <input value={eventForm.title} onChange={e => setEventForm({
                   ...eventForm,
                   title: e.target.value
                 })} />
@@ -1977,12 +1992,13 @@ export default function App() {
 
                   {events.map(event => <div className="pending-row" key={event.id}>
                       <div>
-                        <strong>{event.title}</strong>
+                        <strong>{event.title || event.description || event.event_date || event.location || t("Image-only event")}</strong>
                         <span>{event.event_date || t("Date not set")}</span>
                       </div>
 
                       <div className="pending-actions">
                         <button className="approve-btn" onClick={() => {
+                    if(authLoading || eventUploading)return;
                     setEditingEvent(event.id);
                     setEventForm({
                       title: event.title || "",
@@ -1994,7 +2010,7 @@ export default function App() {
                     });
                   }}>{t("Edit")}</button>
 
-                        <button className="reject-btn" onClick={() => deleteEvent(event.id)}>{t("Delete")}</button>
+                        <button className="reject-btn" disabled={authLoading || eventUploading} onClick={() => deleteEvent(event.id)}>{t("Delete")}</button>
                       </div>
                     </div>)}
                 </div>
@@ -2006,14 +2022,18 @@ export default function App() {
               marginTop: 24
             }}>
                   <h3>{t("Manage Committee")}</h3>
+                  <div className="committee-admin-toolbar"><label>{t('Archive year')}<select value={route.committee || 'all'} onChange={e=>{go({committee:e.target.value==='all' ? null : e.target.value});if(!editingCommittee && e.target.value!=='all')setCommitteeForm(d=>({...d,committee_year:Number(e.target.value)}));}}><option value="all">{t('All years')}</option>{committeeYears(committee,new Date().getFullYear(),route.committee).map(year=><option key={year} value={year}>{year}</option>)}</select></label><button type="button" className="btn-outline" disabled={authLoading || committeeUploading} onClick={prepareCommitteeYear}>{t('Prepare next committee year')}</button></div>
+                  <p>{t('A new year is published only after a verified member is saved. No historical members are generated.')}</p>
 
+                  {route.committee && /^\d{4}$/.test(route.committee) && <CommitteeOrdering key={route.committee+':'+(committeeLayouts.find(l=>Number(l.year)===Number(route.committee))?.revision || 0)+':'+committee.filter(m=>String(m.committee_year)===route.committee).map(m=>m.id+':'+m.position).join(',')} year={Number(route.committee)} members={committee.filter(m=>String(m.committee_year)===route.committee)} layout={committeeLayouts.find(l=>Number(l.year)===Number(route.committee))} available={orderingAvailable} onSaved={async layout=>{setCommittee(current=>applyCommitteeRanks(current,layout));setCommitteeLayouts(old=>[...old.filter(l=>Number(l.year)!==Number(layout.year)),layout]);setMessage('Committee order saved.');}}/>}
+                  {!route.committee && <p>{t('Choose a committee year before arranging positions.')}</p>}
                   <form onSubmit={saveCommittee}><fieldset disabled={authLoading || committeeUploading}><ImageUpload userId={session?.user.id} admin onBusy={setCommitteeUploading} onUploaded={photo_url => setCommitteeForm(d => ({
                   ...d,
                   photo_url
                 }))} />
-                    <label>{t("Committee year")}<input type="number" min="1900" max="2200" required value={committeeForm.committee_year} onChange={e => setCommitteeForm({
+                    <label>{t("Committee year")}<input type="number" min="1900" max="2200" required={!editingCommittee} value={committeeForm.committee_year} onChange={e => setCommitteeForm({
                     ...committeeForm,
-                    committee_year: Number(e.target.value)
+                    committee_year: e.target.value === "" ? "" : Number(e.target.value)
                   })} /></label>
                     <label className="checkbox-label"><input type="checkbox" checked={committeeForm.is_current} onChange={e => setCommitteeForm({
                     ...committeeForm,
@@ -2030,11 +2050,12 @@ export default function App() {
                 })} />
 
                     <label>{t("Position")}</label>
-                    <input required value={committeeForm.position} onChange={e => setCommitteeForm({
+                    <input list="committee-position-options" required value={committeeForm.position} onChange={e => setCommitteeForm({
                   ...committeeForm,
                   position: e.target.value
                 })} />
 
+                    <datalist id="committee-position-options">{[...new Set([...DEFAULT_POSITIONS,...committee.map(m=>m.position),...committeeLayouts.flatMap(l=>l.positions)])].map(position=><option key={position} value={position}/>)}</datalist>
                     <label>{t("Batch")}</label>
                     <input value={committeeForm.batch} onChange={e => setCommitteeForm({
                   ...committeeForm,
@@ -2058,7 +2079,7 @@ export default function App() {
                 }}>{t("Cancel")}</button>}
                   </fieldset></form>
 
-                  {committee.map(person => <div className="pending-row" key={person.id}>
+                  {committee.filter(person=>!route.committee || String(person.committee_year)===route.committee).map(person => <div className="pending-row" key={person.id}>
                       <div>
                         <strong>{person.name}</strong>
                         <span>{person.position}{t("\xB7") + " "}{person.is_current !== false ? t("Current") : t("Historical")}{t("\xB7") + " "}{person.committee_year || t("Year not set")}</span>
@@ -2066,6 +2087,7 @@ export default function App() {
 
                       <div className="pending-actions">
                         <button className="approve-btn" onClick={() => {
+                    if(authLoading || committeeUploading)return;
                     setEditingCommittee(person.id);
                     setCommitteeForm({
                       name: person.name || "",
@@ -2074,11 +2096,11 @@ export default function App() {
                       photo_url: person.photo_url || "",
                       introduction: person.introduction || "",
                       is_current: person.is_current !== false,
-                      committee_year: person.committee_year || new Date().getFullYear(),
+                      committee_year: person.committee_year ?? '',
                     });
                   }}>{t("Edit")}</button>
 
-                        <button className="reject-btn" onClick={() => deleteCommittee(person.id)}>{t("Delete")}</button>
+                        <button className="reject-btn" disabled={authLoading || committeeUploading} onClick={() => deleteCommittee(person.id)}>{t("Delete")}</button>
                       </div>
                     </div>)}
                 </div>
@@ -2100,17 +2122,6 @@ export default function App() {
           <p>{t("\xA9") + " "}{new Date().getFullYear()}{" "}{t("SMSA. All rights reserved.")}</p>
         </div>
       </footer>
-    </div>;
-}
-function Feature({
-  icon,
-  title,
-  text
-}) {
-  return <div className="feature-card">
-      <div className="feature-icon">{icon}</div>
-      <h3>{title}</h3>
-      <p>{text}</p>
     </div>;
 }
 function PageHeading({

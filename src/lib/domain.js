@@ -19,7 +19,9 @@ export function validateImage(file) {
 export function validatePhone(phone) {
   return !phone?.trim() || /^[+\d][\d\s()-]{5,19}$/.test(phone.trim());
 }
+export const CONTENT_KINDS=['official','batch','social','carousel','about'];
 export async function saveSiteContent(client, draft) {
+  if(!CONTENT_KINDS.includes(draft.kind))throw new Error('Unsupported content type. Please reload the editor.');
   const payload = Object.fromEntries(['kind','key','title','description','image_url','url','enabled','display_order'].map(key => [key,draft[key]]));
   if (payload.kind === 'official') payload.key = 'smsa';
   const table = client.from('site_content');

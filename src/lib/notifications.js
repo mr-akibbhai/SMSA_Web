@@ -1,5 +1,8 @@
 // Only interface messages on this allowlist may reach a visitor verbatim.
 export const knownMessages = new Set([
+ 'Committee order saved.','Committee ordering is busy. Please try again.','Committee ordering is not enabled yet.','Choose a committee year before arranging positions.','Committee membership changed. Reload before saving the order.','Unsupported content type. Please reload the editor.','Add event information or an image before saving.',
+ 'Could not confirm the photo record. Reload this gallery before trying again.',
+ 'Please choose no more than the available image slots.','Saved, but refreshing failed. Please retry loading the latest records.','Please enter an event title.','Member name and position are required.','Please enter a valid committee year.','Invalid gallery upload association.','Year selected. Add a verified member to publish this committee year.',
  'This batch has linked content. Keep its existing name.',
  'Photo removed from the gallery. Image cleanup could not finish; please contact the administrator.','Please enter a whole number for display order.','Please sign in first.','Please choose a JPEG, PNG or WebP image.','Please select an image smaller than 10 MB.',
  'Please enter a valid phone number.','Your changes have been saved.','Content saved.','Member profile updated.',
@@ -26,6 +29,15 @@ export function friendlyMessage(error){
  const value=typeof error==='string'?error:error?.message || '';
  if(!value)return '';
  if(knownMessages.has(value))return value;
+ if(error?.code==='23502' || /violates not.null constraint/i.test(value))return 'A required database field is missing (23502). Optional-field compatibility needs review.';
+ if(error?.code==='23514' || /violates check constraint/i.test(value))return 'A database validation rule rejected this record (23514). Please review the saved field requirements.';
+ if(error?.code==='22007' || error?.code==='22008')return 'The date format was rejected. Please choose a valid date.';
+ if(error?.code==='PGRST202' || error?.code==='42883')return 'This management feature needs database setup. Please contact the administrator.';
+ if(error?.code==='55P03' || error?.code==='40P01')return 'Committee ordering is busy. Please try again.';
+ if(error?.code==='40001')return 'Committee membership changed. Reload before saving the order.';
+ if(String(error?.statusCode || error?.status)==='413' || /maximum allowed size|payload too large/i.test(value))return 'The image exceeds the Storage bucket size limit. Please choose a smaller image.';
+ if(/mime type.*not supported|invalid mime/i.test(value))return 'The Storage bucket does not allow this image type. Use JPEG, PNG or WebP.';
+ if(String(error?.statusCode || error?.status)==='401')return 'Your session is no longer valid. Please sign in again.';
  if(/invalid login credentials/i.test(value))return 'Email or password is incorrect.';
  if(/email.*not.*confirmed/i.test(value))return 'Please confirm your email before signing in.';
  if(/already.*registered/i.test(value))return 'This email is already registered. Please sign in.';

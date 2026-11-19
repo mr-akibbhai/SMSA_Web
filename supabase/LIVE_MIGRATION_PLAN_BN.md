@@ -1,4 +1,86 @@
+# Homepage correction-এর পরে database boundary
+
+Homepage Committee এখন Alumni-এর ঠিক পরে independent section; কোনো নতুন page/submenu/table নয়। এই correction-এর জন্য কোনো SQL change/apply দরকার হয়নি। Existing committee_members/year/is_current এবং ordering adapter ব্যবহৃত; production flag false। Current local browser/build checks mock verification মাত্র।
+
+আগের revised CMS migration, privilege inspection, approval ও runtime verification pending অবস্থাতেই আছে। এই navigation delivery migration চালানো, পুরোনো চার migration prerequisite হিসেবে চালানো বা flag activate করার অনুমোদন নয়। এই turn-এ SQL runtime test করা হয়নি। বিস্তারিত current delivery: HANDOVER_BN.md-এর প্রথম অংশ।
+
+---
+
+# সর্বশেষ audit নির্দেশনা — apply/activation বন্ধ
+
+এই revised migration-এ save RPC এখন পাঁচ argument (শেষটি p_expected_members jsonb)। Supplied inspection-এ TRUNCATE/role flags/table owners/function settings নেই; অতিরিক্ত read-only query supabase/inspect_ordering_privileges.sql প্রস্তুত, চালানো হয়নি। Unsafe privilege/schema drift হলে migration abort করবে, existing grants বদলাবে না। Existing four-argument RPC পাওয়া গেলে manual review ছাড়া apply নয়।
+
+এই ধাপে SQL/PGlite কিছুই execute হয়নি। আগের চার-argument draft-এর PostgreSQL 17.5/18.7 tests revised SQL-এর verification নয়। বর্তমান SQL/PLpgSQL parser, static/unit, mock browser/production build পাস; actual revised apply/reapply/locking/JWT tests বাকি। Exact findings/file-lines: HANDOVER_BN.md-এর প্রথম অংশ।
+
+স্পষ্ট approval এবং missing inspection review-এর আগে migration apply বা production flag true করা যাবে না। পুরোনো নিচের নির্দেশনায় member-set checks পড়লে নতুন position/display_order snapshot check-ও প্রযোজ্য।
+
+---
+
+# বর্তমান CMS ordering পরিকল্পনা — inspection যাচাই: ১৯ নভেম্বর ২০২৬
+
+**অবস্থা: review/approval-এর জন্য প্রস্তুত; live SQL apply হয়নি।** এই অংশটি শুধু events ও committee ordering-এর বর্তমান upgrade নির্দেশনা। নিচের পুরোনো চার-file পরিকল্পনা এই feature-এর prerequisite নয়।
+
+## নিশ্চিত inspection
+
+supabase/cms_schema_inspection_result.txt: 40,839 bytes, valid সম্পূর্ণ JSON, প্রত্যাশিত ১১টি top-level field উপস্থিত; PostgreSQL 17.11। এটি metadata snapshot; বর্তমান live state পরে বদলাতে পারে। Application records বা is_admin function body এতে নেই।
+
+- events: id uuid PK/default gen_random_uuid(); title text NOT NULL/default নেই; description text, event_date date, location text, created_at timestamptz nullable। title non-empty CHECK নেই। image_url ও enabled অনুপস্থিত।
+- committee_members: id uuid PK; name ও position text NOT NULL; batch ও photo_url text nullable; display_order integer nullable/default 0; created_at timestamptz nullable/default now(); introduction text NOT NULL/default ''; committee_year integer nullable; is_current boolean NOT NULL/default true।
+- Constraints ও indexes: প্রত্যেক table-এ শুধু id primary key এবং তার unique btree index। Inspection-এ কোনো অতিরিক্ত CHECK/UNIQUE/FK/incoming FK বা user trigger নেই।
+- উভয় table-এ RLS enabled, FORCE RLS false। Public SELECT policy true; authenticated Admin ALL USING/WITH CHECK is_admin()। Anon SELECT grant আছে, table-level write grant নেই। Authenticated CRUD grant আছে, কিন্তু RLS write admin-এ সীমাবদ্ধ করে। Column grants-ও export-এ আছে; migration কোনো existing table/column grants পরিবর্তন করে না।
+- is_admin(): boolean, STABLE, SECURITY DEFINER; authenticated EXECUTE আছে। Definition ও ACL বদলানো হবে না।
+
+## প্রস্তাবিত SQL ও execution order
+
+1. **এখন কোনো SQL চালাবেন না।** 20261119_cms_ordering.sql review করে স্পষ্ট approval দিন।
+2. Approval-এর পরে backup/staging এবং একই read-only inspection দিয়ে schema/policy drift পরীক্ষা করুন। Migration-এর preflight expected column types, RLS ও baseline policy drift হলে abort করবে।
+3. শুধু supabase/migrations/20261119_cms_ordering.sql একটি সম্পূর্ণ transaction হিসেবে manually apply করার প্রস্তাব। আগের 20261117_content_features.sql, 20261117_gallery_guards.sql, 20261119_batch_actions.sql ও 20261119_ui_experience.sql এই কাজের জন্য চালানোর প্রয়োজন নেই; সেগুলোর আলাদা dependencies/review বজায় আছে। এই review তাদের live compatibility অনুমোদন নয়।
+4. Live role tests এবং দুই admin session-এর conflict test পাসের পর src/lib/cms-capabilities.js-এ committeeOrderingReady true করা যাবে। বর্তমান false মান অপরিবর্তিত; production নতুন ordering RPC ডাকে না।
+
+## নতুন migration কী করবে
+
+- events.image_url text nullable এবং events.enabled boolean NOT NULL DEFAULT true যোগ করবে। Existing records delete/rewrite করবে না; নতুন enabled default পুরোনো events visible রাখে। title NOT NULL অক্ষুণ্ণ; optional title-এর জন্য React খালি string পাঠায়, NULL নয়।
+- Existing permissive events policies রেখে একটি restrictive SELECT policy যোগ করবে: public enabled events পড়বে, admins disabled-ও পড়বে। Existing read grant ও public permissive policy থাকায় restrictive policy একা কোনো permission দেয় না। Committee policies অপরিবর্তিত।
+- public.smsa_committee_layouts_v1: year PK, positions text[], member_ids uuid[], revision integer। Empty/custom position ও per-year revision রাখার জন্য পৃথক metadata দরকার; member records duplicate হয় না। Existing display_order শুধু admin explicit Save-এ member rank হিসেবে update হবে; migration নিজে পুরোনো ranks update করবে না।
+- নতুন metadata table-এ RLS public SELECT; anon/authenticated সরাসরি write grant পাবে না। নতুন save RPC SECURITY DEFINER, auth.uid()/public.is_admin() check, fixed pg_catalog,pg_temp search_path ও সীমিত EXECUTE grant ব্যবহার করবে। Read RPC SECURITY INVOKER/STABLE। Existing default privileges পরিবর্তন নয়; শুধু নিজের নতুন objects-এর permissions নির্দিষ্ট করা হবে।
+- Save transaction committee_members-এ SHARE ROW EXCLUSIVE lock নিয়ে INSERT/UPDATE/DELETE-র সঙ্গে serialize করবে; public SELECT চলতে পারে। তারপর exact year-member set ও expected revision পরীক্ষা করে member ranks এবং layout atomically লিখবে। Invalid/stale request exception হলে সব rollback। No members থাকলে empty year publish করবে না। Lock timeout 5 seconds; committee CRUD/save-এর স্বল্প অপেক্ষা বা retry লাগতে পারে। READ COMMITTED প্রয়োজন।
+- Migration rerun data মুছে না; unrelated name collision বা changed existing event visibility policy abort করে। নিজস্ব marked functions-ই replace হতে পারে; is_admin বা পুরোনো functions/triggers নয়।
+- Storage bucket visibility/limits/MIME/policies, site_content, profiles, batches, user_roles ও gallery অপরিবর্তিত। উভয় bucket-এর confirmed 10 MB JPEG/PNG/WebP settings অক্ষুণ্ণ।
+
+## স্থানীয় যাচাই সম্পন্ন
+
+- npm.cmd test, npm.cmd run test:migrations, npm.cmd run test:browser (390px ও 1440px; 320px overflow checks), production smoke ও npm.cmd run build পাস। Browser-এর external requests স্থানীয়ভাবে fulfil করা হয়েছে; Supabase network connection নয়।
+- সম্পূর্ণ নতুন migration SQL ও PL/pgSQL parser পাস।
+- tests/committee-migration.test.mjs দিয়ে temporary **in-memory PGlite/PostgreSQL 17.5 ও 18.7**-এ migration apply/reapply পাস। Live snapshot 17.11; exact Supabase runtime নয়। Table/column definitions, constraints ও চারটি existing policies inspection থেকে নেওয়া; auth.uid/is_admin ও records কৃত্রিম। Existing grants/policies/admin helper/ranks preservation; actual React payload columns; public read/member denial/admin atomic save; stale revision/member-set/invalid payload rollback; disabled-event visibility; saved data retained on rerun; unrelated-object collision rejection পাস।
+- Multi-session contention, actual is_admin body/JWT, Supabase PostgREST response ও live ownership এখানে যাচাই হয়নি।
+- Optional isolated test dependency project package/lockfile-এ যোগ করা হয়নি। Reproduce করতে বাইরে temporary directory-তে @electric-sql/pglite install করে SMSA_PGLITE_MODULE-এ তার absolute module path দিন; তারপর node tests/committee-migration.test.mjs চালান। এই shell variable credential নয়; .env বদলানোর প্রয়োজন নেই। ব্যবহৃত package archive official npm SHA512 integrity দিয়ে যাচাই করা হয়েছে।
+- PostgreSQL function security ও locking reference: https://www.postgresql.org/docs/17/sql-createfunction.html এবং https://www.postgresql.org/docs/17/explicit-locking.html ।
+
+## Approval-এর পরে live acceptance tests
+
+- Anon ও normal member: enabled event ও committee/layout read; disabled event hidden; ordering write/direct metadata writes denied।
+- Admin: disabled event read/edit; untitled image/description event save; একই পদে একাধিক member reorder; position reorder/custom empty position; year-specific order reload ও public view।
+- একই revision থেকে দুই admin save: প্রথমটি success, দ্বিতীয়টি 40001; reload করে retry। Member insert/delete/year move-এর সঙ্গে concurrent save: partial ranks/layout নয়; changed membership হলে 40001।
+- পুরোনো member/name/position/year/photo অপরিবর্তিত; অন্য বছরের ranks অপরিবর্তিত। Existing profile/gallery flows ও Storage policies/settings অপরিবর্তিত যাচাই।
+- PostgREST RPC cache/schema reload, real JWT/admin function behavior, deployment role ownership ও multi-session locking স্থানীয় mock দিয়ে সম্পূর্ণ প্রমাণ করা যায় না।
+
+---
+
 # Existing live SMSA database: manual migration review plan
+
+## সর্বশেষ live Storage confirmation — ১৯ নভেম্বর ২০২৬
+
+ব্যবহারকারীর Supabase inspection result অনুযায়ী:
+
+| Bucket | Public | File size limit | Allowed MIME types |
+|---|---|---|---|
+| batch-gallery | false | 10485760 bytes (10 MB) | image/jpeg, image/png, image/webp |
+| site-media | true | 10485760 bytes (10 MB) | image/jpeg, image/png, image/webp |
+
+এই current settings সংরক্ষণ করতে হবে। Visibility, size, MIME বা existing Storage policies পরিবর্তনের demonstrated requirement নেই। Frontend-এর 10 MB/JPEG-PNG-WebP validation ইতিমধ্যে এই settings-এর সঙ্গে মেলে; bucket পরিবর্তনের migration প্রয়োজন নেই। পুরোনো NULL/unlimited/50 MB baseline শুধু historical তথ্য—বর্তমান live state নয়। Bucket settings বদলানোর জন্য পুরোনো migration-এর bucket section চালাবেন না; অন্য sections প্রয়োজন হলে actual schema/policies ও migration history আলাদা review করতে হবে।
+
+এটি events/committee_members column definitions, constraints বা Storage policy expressions নিশ্চিত করে না। Table inspection এবং live CRUD/RLS verification এখনও pending। এখানে Supabase-এ connect বা SQL execute করা হয়নি; তথ্যের উৎস ব্যবহারকারীর live inspection।
+
 
 এই নথি HANDOVER_BN.md-এর পুরোনো fresh-install SQL নির্দেশনার পরিবর্তে প্রযোজ্য। Source code unchanged in this task. কোনো live SQL চালানো হয়নি।
 
@@ -6,7 +88,7 @@
 
 - site_content, তার columns/unique constraint/RLS এবং smsa_content_read/write policies আছে।
 - site-media public, 10485760 bytes, JPEG/PNG/WebP।
-- নতুন verified finding: batch-gallery private, file_size_limit=NULL এবং allowed_mime_types=NULL (unlimited)। UI migration এই state থেকে 10485760 bytes ও JPEG/PNG/WebP-এ transition গ্রহণ করে; আগের 50 MB state-ও স্বীকৃত।
+- Current confirmed batch-gallery: private, 10485760 bytes (10 MB), JPEG/PNG/WebP। আগে রিপোর্ট করা NULL/unlimited এবং 50 MB state historical; transition code আছে বলে এখন সেটি execute করা প্রয়োজন নয়।
 - gallery_batch_limit_trigger -> check_gallery_batch_limit() আছে।
 - protect_profile_status trigger আছে; তার function body project-এ নেই।
 - public.is_admin() existing; তার definition/ACL পরিবর্তন করা হবে না।

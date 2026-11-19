@@ -5,6 +5,7 @@ import React from 'react';
 const server = await createServer({ optimizeDeps:{noDiscovery:true,entries:[]}, server:{middlewareMode:true}, appType:'custom' });
 try {
  const m = await server.ssrLoadModule('/src/components/ContentFeatures.jsx');
+ assert.equal(m.HOMEPAGE_SLIDE_MS,1500);assert.equal(m.HOMEPAGE_MANUAL_PAUSE_MS,5000);
  assert.equal(m.safeLink('javascript:alert(1)'), null);
  assert.equal(m.safeLink('http://example.com'), null);
  assert.equal(m.safeLink('https://example.com/group'), 'https://example.com/group');
@@ -23,10 +24,19 @@ try {
  const socials=renderToStaticMarkup(React.createElement(management.SocialLinksManager,{content:fixture}));
  assert.equal((socials.match(/<form /g)||[]).length,2,'Social links have independent dedicated forms');
  const domain=await server.ssrLoadModule('/src/components/Experience.jsx');
+ const emptyAbout=renderToStaticMarkup(React.createElement(domain.AboutSlideshow,{items:[]}));
+ assert.equal(emptyAbout,'','No default About placeholder is published');
+ const singleAbout=renderToStaticMarkup(React.createElement(domain.AboutSlideshow,{items:[{id:'one',kind:'about',enabled:true,image_url:'/one.png',title:''}]}));
+ const manyAbout=renderToStaticMarkup(React.createElement(domain.AboutSlideshow,{items:Array.from({length:30},(_,i)=>({id:i,kind:'about',enabled:true,image_url:'/image-'+i+'.png'}))}));
+ assert.equal((manyAbout.match(/<img src=/g)||[]).length,3,'Thirty slides only load current and adjacent images initially');
+ assert(singleAbout.includes('single-slide'));assert(!singleAbout.includes('<figcaption'));assert(!singleAbout.includes('slideshow-pause'));
  assert.equal(domain.MANUAL_PAUSE_MS,7000);
  assert.equal(domain.interactionPauseUntil(1000),8000);
  const about=renderToStaticMarkup(React.createElement(domain.AboutSlideshow,{items:[{id:'a',kind:'about',enabled:true,image_url:'/a.png',display_order:2,title:'Later'},{id:'b',kind:'about',enabled:true,image_url:'/b.png',display_order:1,title:'First'},{id:'c',kind:'about',enabled:false,image_url:'/c.png',title:'Hidden'}]}));
  assert.ok(about.indexOf('Later')<about.indexOf('First'),'About uses record creation order, not display_order');assert.ok(!about.includes('Hidden'));
+ const ordering=await server.ssrLoadModule('/src/components/CommitteeOrdering.jsx');
+ const unavailable=renderToStaticMarkup(React.createElement(ordering.default,{year:2026,members:[],available:false,onSaved:()=>{}}));
+ assert(unavailable.includes('not enabled yet'));assert(/disabled[^>]*>Save committee order/.test(unavailable));
  const i18n=await server.ssrLoadModule('/src/lib/i18n.jsx');
  assert.equal(i18n.translate('Save Changes','bn'),'পরিবর্তন সংরক্ষণ করুন');
  assert.equal(i18n.translate('Dakhil-2020','bn'),'Dakhil-2020');

@@ -4,6 +4,7 @@ import { useEffect, useState, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { saveSiteContent, validateImage } from '../lib/domain';
 import { useReducedMotion } from './Experience';
+import { deleteRecord, REFRESH_WARNING } from '../lib/cms';
 export function safeLink(value) {
   try {
     const url = new URL(value);
@@ -12,72 +13,60 @@ export function safeLink(value) {
     return null;
   }
 }
-export function ImageUpload({
-  userId,
-  admin = false,
-  onUploaded,
-  onBusy = () => {}
-}) {
-  const {
-    t
-  } = useLanguage();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [preview, setPreview] = useState('');
-  useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
-  return <div className="upload-field"><label>{t("Upload image (JPEG, PNG or WebP, maximum 10 MB)")}<input type="file" accept="image/jpeg,image/png,image/webp" disabled={busy} onChange={async e => {
-        const file = e.target.files?.[0];
-        if (!file) return;
-        setError('');
-        setBusy(true);
-        onBusy(true);
-        try {
-          if (!userId) throw new Error('Please sign in first.');
-          const validation = validateImage(file);
-          if (validation) throw new Error(validation);
-          setPreview(URL.createObjectURL(file));
-          const path = `${admin ? 'admin' : userId}/${crypto.randomUUID()}.${file.type.split('/')[1]}`;
-          const {
-            error
-          } = await supabase.storage.from('site-media').upload(path, file, {
-            contentType: file.type
-          });
-          if (error) throw error;
-          const {
-            data
-          } = supabase.storage.from('site-media').getPublicUrl(path);
-          onUploaded(data.publicUrl);
-        } catch (err) {
-          logDiagnostic(err), setError(friendlyMessage(err));
-        } finally {
-          setBusy(false);
-          onBusy(false);
-          e.target.value = '';
-        }
-      }} /></label>{preview && <img className="image-preview" src={preview} alt={t('Selected upload')} />}{busy && <p role="status">{t("Uploading\u2026")}</p>}{error && <p role="alert">{t(error)}</p>}</div>;
+export function ImageUpload({userId,admin=false,onUploaded,onBusy=()=>{},multiple=false,maxFiles=1,label}) {
+  const {t}=useLanguage();
+  const [busy,setBusy]=useState(false), [error,setError]=useState(''), [previews,setPreviews]=useState([]);
+  const locked=useRef(false);
+  useEffect(()=>()=>previews.forEach(url=>URL.revokeObjectURL(url)),[previews]);
+  async function upload(e){
+    const input=e.currentTarget, files=Array.from(input.files || []);
+    if(!files.length || locked.current)return;
+    setError('');
+    try {
+      if(!userId)throw new Error('Please sign in first.');
+      if(files.length>maxFiles)throw new Error('Please choose no more than the available image slots.');
+      for(const file of files){const error=validateImage(file);if(error)throw new Error(error);}
+      setPreviews(files.map(file=>URL.createObjectURL(file)));
+      locked.current=true;setBusy(true);onBusy(true);
+      for(const file of files){
+        const path=`${admin ? 'admin' : userId}/${crypto.randomUUID()}.${file.type.split('/')[1]}`;
+        const {error}=await supabase.storage.from('site-media').upload(path,file,{contentType:file.type,upsert:false});
+        if(error)throw error;
+        const {data}=supabase.storage.from('site-media').getPublicUrl(path);
+        if(!data?.publicUrl)throw new Error('Your changes could not be saved. Please refresh and try again.');
+        await onUploaded(data.publicUrl);
+      }
+      setPreviews([]);
+    } catch(error){logDiagnostic(error);setError(friendlyMessage(error));}
+    finally {locked.current=false;setBusy(false);onBusy(false);input.value='';}
+  }
+  return <div className="upload-field"><label>{t(label || 'Upload image (JPEG, PNG or WebP, maximum 10 MB)')}<input type="file" accept="image/jpeg,image/png,image/webp" multiple={multiple} disabled={busy || maxFiles<1} onChange={upload}/></label>
+    <div className="local-previews">{previews.map(url=><img key={url} className="image-preview" src={url} alt={t('Selected upload')}/>)}</div>{busy && <p role="status">{t('Uploading…')}</p>}{error && <p role="alert">{t(error)}</p>}
+  </div>;
 }
 export function useSiteContent() {
   const sequence = useRef(0);
   const [items, setItems] = useState([]);
   const [error, setError] = useState('');
+  const [ready,setReady] = useState(false);
   async function reload() {
-    const request = ++sequence.current;
-    if (!supabase) return;
-    const {
-      data,
-      error
-    } = await supabase.from('site_content').select('*').order('created_at').order('id');
-    if (request !== sequence.current) return;
-    if (error) {
-      setError('Additional website content is unavailable. Please retry; the database setup may be pending.');
-      return;
+    const request=++sequence.current;
+    try {
+      if(!supabase)throw new Error('Supabase configuration is missing.');
+      const {data,error}=await supabase.from('site_content').select('*').order('created_at').order('id');
+      if(error)throw error;
+      if(request!==sequence.current)return {ok:false,stale:true};
+      setError('');setItems(data || []);setReady(true);return {ok:true};
+    } catch(error){
+      if(request===sequence.current){setError('Additional website content is unavailable. Please retry; the database setup may be pending.');setReady(true);}
+      return {ok:false,error};
     }
-    setError('');
-    setItems(data || []);
   }
+
   return {
     items,
     error,
+    ready,
     reload
   };
 }
@@ -99,30 +88,28 @@ export function CommunityLinks({
   } = useLanguage();
   return <div className="community-links">{items.filter(i => i.kind === 'social' && ['facebook','messenger'].includes(i.key) && i.enabled && safeLink(i.url)).map(i => <a className="social-link" href={safeLink(i.url)} key={i.id} target="_blank" rel="noopener noreferrer"><SocialIcon messenger={i.key === 'messenger'} />{i.title || (i.key === 'facebook' ? t("Facebook Group") : t("Messenger Group"))}</a>)}</div>;
 }
-export function Carousel({
-  items
-}) {
-  const {
-    t
-  } = useLanguage();
-  const slides = items.filter(i => i.kind === 'carousel' && i.enabled && safeLink(i.image_url));
-  const [index, setIndex] = useState(0);
-  const [paused, setPaused] = useState(false);
-  const reducedMotion = useReducedMotion();
-  const current = slides.length ? index % slides.length : 0;
-  useEffect(() => {
-    if (paused || slides.length < 2 || reducedMotion) return;
-    const timer = setInterval(() => setIndex(i => (i + 1) % slides.length), 6000);
-    return () => clearInterval(timer);
-  }, [slides.length, paused, reducedMotion]);
-  if (!slides.length) return null;
-  return <section className="home-carousel container" aria-label={t("SMSA highlights")} aria-roledescription="carousel" onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)} onFocusCapture={() => setPaused(true)}>
-    <div className="carousel-window"><div className="carousel-track" style={{
-        transform: `translateX(-${current * 100}%)`
-      }}>{slides.map((s, i) => <figure key={s.id} aria-hidden={i !== current}><img src={s.image_url} alt={s.title || t("SMSA community highlight")} /><figcaption>{s.title}</figcaption></figure>)}</div></div>
-    <div className="carousel-controls"><button onClick={() => setIndex((current + slides.length - 1) % slides.length)} aria-label={t("Previous slide")}>{t("\u2190")}</button><span>{current + 1}{t("/") + " "}{slides.length}</span><button onClick={() => setIndex((current + 1) % slides.length)} aria-label={t("Next slide")}>{t("\u2192")}</button><button onClick={() => setPaused(!paused)}>{paused ? t("Play") : t("Pause")}</button></div>
+export const HOMEPAGE_SLIDE_MS=1500;
+export const HOMEPAGE_MANUAL_PAUSE_MS=5000;
+export function Carousel({items}) {
+  const {t}=useLanguage();
+  const slides=items.filter(i=>i.kind==='carousel' && i.enabled && safeLink(i.image_url));
+  const [index,setIndex]=useState(0), [paused,setPaused]=useState(false), [manualUntil,setManualUntil]=useState(0);
+  const reducedMotion=useReducedMotion();
+  const current=slides.length ? index % slides.length : 0;
+  useEffect(()=>{
+    if(paused || reducedMotion || slides.length<2)return;
+    const delay=manualUntil>Date.now() ? manualUntil-Date.now() : HOMEPAGE_SLIDE_MS;
+    const timer=setTimeout(()=>{setIndex(i=>(i+1)%slides.length);setManualUntil(0);},delay);
+    return ()=>clearTimeout(timer);
+  },[index,slides.length,manualUntil,paused,reducedMotion]);
+  function manual(delta){setIndex((current+delta+slides.length)%slides.length);setManualUntil(Date.now()+HOMEPAGE_MANUAL_PAUSE_MS);}
+  if(!slides.length)return null;
+  return <section className="home-carousel container" aria-label={t('SMSA highlights')} aria-roledescription="carousel">
+    <div className="carousel-window"><div className="carousel-track" style={{transform:`translateX(-${current*100}%)`}}>{slides.map((slide,i)=><figure key={slide.id} aria-hidden={i!==current}><img src={slide.image_url} alt={slide.title || t('SMSA community highlight')}/>{slide.title && <figcaption>{slide.title}</figcaption>}</figure>)}</div></div>
+    {slides.length>1 && <div className="carousel-controls"><button onClick={()=>manual(-1)} aria-label={t('Previous slide')}>←</button><span>{current+1}/{slides.length}</span><button onClick={()=>manual(1)} aria-label={t('Next slide')}>→</button><button onClick={()=>{setPaused(!paused);setManualUntil(0);}}>{t(paused ? 'Play' : 'Pause')}</button></div>}
   </section>;
 }
+
 const blank = {
   kind: 'official',
   key: 'smsa',
@@ -153,9 +140,13 @@ export function ContentManager({
     setMessage('');
     try {
       if (draft.kind === 'social' && draft.url && !safeLink(draft.url)) throw new Error('Use a complete HTTPS community URL.');
-      await saveSiteContent(supabase, draft);
+      const record={...draft,key:draft.key?.trim() || (draft.kind==='carousel' ? 'slide-' : 'image-')+crypto.randomUUID()};
+      setDraft(record);
+      const saved=await saveSiteContent(supabase, record);
+      setDraft({...record,id:saved.id});
+      const refreshed=await content.reload();
+      if(refreshed?.ok===false){setMessage(REFRESH_WARNING);return;}
       setDraft(fresh());
-      await content.reload();
       setMessage('Content saved.');
     } catch (err) {
       logDiagnostic(err), setMessage(friendlyMessage(err));
@@ -167,7 +158,6 @@ export function ContentManager({
     {content.error && <p role="alert">{t(content.error)}</p>}<form onSubmit={save}>
     <fieldset disabled={busy || uploading}><label>{t("Content type")}<select value={draft.kind} onChange={e => setDraft({
           ...blank,
-          id: draft.id,
           kind: e.target.value,
           key: e.target.value === 'official' ? 'smsa' : ''
         })}>{kinds.map(kind => <option key={kind} value={kind}>{t({official:'Official SMSA Profile',batch:'Batch Profile',social:'Social Media & Community Links',carousel:'Homepage Carousel',about:'About Images'}[kind])}</option>)}</select></label>
@@ -177,11 +167,11 @@ export function ContentManager({
         })}><option value="">{t("Select batch")}</option>{batchNames.map(n => <option key={n}>{n}</option>)}</select></label> : draft.kind === 'social' ? <label>{t("Community")}<select value={draft.key} required onChange={e => setDraft({
           ...draft,
           key: e.target.value
-        })}><option value="">{t("Choose community")}</option><option value="facebook">{t("Facebook Group")}</option><option value="messenger">{t("Messenger Group")}</option></select></label> : ['carousel', 'about'].includes(draft.kind) ? <label>{t("Unique slide name")}<input required value={draft.key} onChange={e => setDraft({
+        })}><option value="">{t("Choose community")}</option><option value="facebook">{t("Facebook Group")}</option><option value="messenger">{t("Messenger Group")}</option></select></label> : ['carousel', 'about'].includes(draft.kind) ? <label>{t("Slide name (optional)")}<input value={draft.key} onChange={e => setDraft({
           ...draft,
           key: e.target.value
         })} /></label> : null}
-    <label>{t("Title")}<input required value={draft.title} onChange={e => setDraft({
+    <label>{t("Title")}<input required={!["carousel","about"].includes(draft.kind)} value={draft.title} onChange={e => setDraft({
           ...draft,
           title: e.target.value
         })} /></label>
@@ -191,10 +181,13 @@ export function ContentManager({
         })} /></label> : <><label>{t("Introduction / information")}<textarea value={draft.description} onChange={e => setDraft({
             ...draft,
             description: e.target.value
-          })} /></label><ImageUpload userId={userId} admin onUploaded={image_url => setDraft(d => ({
-          ...d,
-          image_url
-        }))} onBusy={setUploading} />{draft.image_url && <img className="image-preview" src={draft.image_url} alt={t("Selected upload")} />}<button type="button" onClick={() => setDraft({
+          })} /></label><ImageUpload userId={userId} admin onUploaded={async image_url => {
+          const record={...draft,image_url,key:draft.key?.trim() || 'slide-'+crypto.randomUUID()};setDraft(record);
+          if(draft.kind!=='carousel')return;
+          const saved=await saveSiteContent(supabase,record);setDraft({...record,id:saved.id});
+          const refreshed=await content.reload();if(refreshed?.ok===false)throw new Error(REFRESH_WARNING);
+          setMessage('Content saved.');
+        }} onBusy={active=>{setUploading(active);if(active)setMessage('');}} />{draft.image_url && <img className="image-preview" src={draft.image_url} alt={t("Selected upload")} />}<button type="button" onClick={() => setDraft({
           ...draft,
           image_url: ''
         })}>{t("Remove image from content")}</button></>}
@@ -203,17 +196,16 @@ export function ContentManager({
           enabled: e.target.checked
         })} />{t("Publicly visible")}</label>
     <button className="btn-primary" disabled={busy || uploading}>{t(busy ? 'Saving...' : 'Save content')}</button> <button type="button" className="btn-outline" onClick={() => setDraft(fresh())}>{t("Cancel / New")}</button></fieldset></form><p role="status">{t(message)}</p>
-    {content.items.filter(item => kinds.includes(item.kind)).map(item => <div className="pending-row" key={item.id}><span>{t(item.kind)}{t(":") + " "}{item.title}{t("(")}{item.enabled ? t("Visible") : t("Hidden")}{t(")")}</span><div className="pending-actions"><button disabled={busy || uploading} onClick={() => setDraft(item)}>{t("Edit")}</button><button disabled={busy || uploading} onClick={async () => {
+    {content.items.filter(item => kinds.includes(item.kind)).map(item => <div className="pending-row" key={item.id}><span>{t(item.kind)}{t(":") + " "}{item.title || t("Untitled content")}{t("(")}{item.enabled ? t("Visible") : t("Hidden")}{t(")")}</span><div className="pending-actions"><button disabled={busy || uploading} onClick={() => setDraft(item)}>{t("Edit")}</button><button disabled={busy || uploading} onClick={async () => {
           if (!window.confirm(t('Delete this content record?'))) return;
           setBusy(true);
-          const {
-            error
-          } = await supabase.from('site_content').delete().eq('id', item.id);
-          if (error) logDiagnostic(error), setMessage(friendlyMessage(error));else {
-            await content.reload();
+          try {
+            await deleteRecord(supabase,'site_content',item.id);
+            const refreshed=await content.reload();
             setDraft(fresh());
-          }
-          setBusy(false);
+            setMessage(refreshed?.ok===false ? REFRESH_WARNING : 'Your changes have been saved.');
+          } catch(error){logDiagnostic(error);setMessage(friendlyMessage(error));}
+          finally{setBusy(false);}
         }}>{t("Delete")}</button></div></div>)}
   </div>;
 }
