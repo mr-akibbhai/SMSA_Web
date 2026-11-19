@@ -22,7 +22,7 @@ const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const clone=value=>structuredClone(value);
 class Query {
   constructor(table){this.table=table;this.filters=[];this.action='select';}
-  select(columns,options){this.options=options;return this;}
+  select(columns,options){this.columns=columns;this.options=options;return this;}
   order(){return this;}
   eq(key,value){this.filters.push(row=>String(row[key])===String(value));return this;}
   update(payload){this.action='update';this.payload=payload;return this;}
@@ -37,6 +37,7 @@ class Query {
     if(failureIndex>=0){const failure=state.failures.splice(failureIndex,1)[0];return {data:failure.empty ? null : [],error:failure.error || null};}
     if(this.table === 'user_roles' && state.failRole)return {data:null,error:{message:'Fixture role failure'}};
     if(this.table==='events' && this.action!=='select' && this.action!=='delete' && state.requireEventTitle && !this.payload.title?.trim())return {data:null,error:{code:'23514',message:'Fixture title constraint'}};
+    if(this.table==='events' && state.missingEventExtensions && (this.columns==='image_url,enabled' || this.payload && ('image_url' in this.payload || 'enabled' in this.payload)))return {data:null,error:{code:'42703',message:'Fixture missing event columns'}};
     const rows=tables[this.table] || [];
     let result=rows.filter(row=>this.filters.every(filter=>filter(row)));
     if(this.action !== 'select'){

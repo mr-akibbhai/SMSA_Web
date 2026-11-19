@@ -52,7 +52,7 @@ try {
   console.log('Checking offline public layout and motion');
   await page.goto('http://127.0.0.1:5182');
   await expectVisible(page.getByText('Our fixture story',{exact:true}));
-  assert.deepEqual(await page.locator('main>section[id]').evaluateAll(nodes=>nodes.map(n=>n.id)),['home','about','alumni','committee','events']);
+  assert.deepEqual(await page.locator('main>section[id]').evaluateAll(nodes=>nodes.map(n=>n.id)),['home','about','events','alumni','committee']);
   assert.equal(await page.locator('#events .event-card').count(),1);
   assert.equal(await page.locator('.featured-events').count(),0);
   assert.equal(await page.locator('.nav-links').getByRole('button',{name:'Gallery',exact:true}).count(),0);
@@ -64,16 +64,37 @@ try {
   await page.locator('#committee .rail-cycle').first().getByRole('button',{name:/^Committee of 2026(?: |$)/}).click();
   await expectVisible(page.locator('#committee').getByRole('heading',{name:'Fixture Chair',exact:true}));
   await activeNav('Committee');
+  assert.deepEqual(await page.locator('main>section[id]').evaluateAll(nodes=>nodes.map(n=>n.id)),['committee'],'Year view excludes every homepage section');
+  assert.equal(await page.getByRole('region',{name:'Committee years',exact:true}).count(),0);
+  await page.setViewportSize({width:320,height:900});await noOverflow();
+  await page.screenshot({path:path.join(screenshotRoot,'committee-year-320.png'),fullPage:true});
+  await page.setViewportSize({width:workflowWidth,height:900});await noOverflow();
+  await page.screenshot({path:path.join(screenshotRoot,'committee-year.png'),fullPage:true});
+  await page.evaluate(()=>history.back());
+  await expectVisible(page.getByRole('region',{name:'Committee years',exact:true}));
+  assert.deepEqual(await page.locator('main>section[id]').evaluateAll(nodes=>nodes.map(n=>n.id)),['committee'],'Browser Back restores dedicated archive');
+  const railPosition=await page.locator('#committee .auto-rail').evaluate(el=>el.scrollLeft);
+  await page.goForward();await expectVisible(page.locator('#committee').getByRole('heading',{name:'Fixture Chair',exact:true}));
   await page.reload();await expectVisible(page.locator('#committee').getByRole('heading',{name:'Fixture Chair',exact:true}));await activeNav('Committee');
   await page.goBack();await expectVisible(page.getByRole('region',{name:'Committee years',exact:true}));
   await page.goForward();await expectVisible(page.locator('#committee').getByRole('heading',{name:'Fixture Chair',exact:true}));
-  await page.locator('#committee').getByRole('button',{name:'Back',exact:true}).click();
+  await page.locator('#committee').getByRole('button',{name:'Back to Committee Archive',exact:true}).click();
   await expectVisible(page.getByRole('region',{name:'Committee years',exact:true}));
+  assert.equal(await page.locator('#committee .committee-card').count(),0);
+  assert(Math.abs(await page.locator('#committee .auto-rail').evaluate(el=>el.scrollLeft)-railPosition)<5,'Archive horizontal position restored');
+  for(const year of ['2024','not-a-year','9999']){
+    await page.goto('http://127.0.0.1:5182/#'+encodeURIComponent(JSON.stringify({page:'Committee',committee:year})));
+    await expectVisible(page.getByText('No verified committee records are available for this year.',{exact:true}));
+    assert.equal(await page.locator('#home,#about,#events,#alumni').count(),0);
+    await page.getByRole('button',{name:'Back to Committee Archive',exact:true}).click();
+    await expectVisible(page.getByRole('region',{name:'Committee years',exact:true}));
+    assert.equal(await page.locator('#home').count(),0);
+  }
   await page.goto('http://127.0.0.1:5182/#committee');await page.reload();await activeNav('Committee');
   await expectVisible(page.getByRole('region',{name:'Committee years',exact:true}));
   await page.evaluate(()=>document.getElementById('alumni').scrollIntoView({behavior:'instant'}));await activeNav('Alumni');
   await page.evaluate(()=>document.getElementById('committee').scrollIntoView({behavior:'instant'}));await activeNav('Committee');
-  await page.evaluate(()=>window.scrollTo({top:document.documentElement.scrollHeight,behavior:'instant'}));await activeNav('Events');
+  await page.evaluate(()=>window.scrollTo({top:document.documentElement.scrollHeight,behavior:'instant'}));await activeNav('Committee');
   await nav('Home').click();await activeNav('Home');
   await page.waitForFunction(()=>window.scrollY<2);
   await page.screenshot({path:path.join(screenshotRoot,'homepage-committee-order.png'),fullPage:true});
@@ -311,6 +332,16 @@ try {
   await page.locator('.admin-gallery .gallery-card').filter({hasText:'Fixture pending'}).getByRole('button',{name:'Delete',exact:true}).click();
   await page.waitForFunction(()=>!window.__smsaMock.tables.gallery_photos.some(p=>p.id==='photo-0'));
 
+  await page.evaluate(()=>{window.__smsaMock.missingEventExtensions=true;});
+  await management.getByRole('button',{name:'Committee Management',exact:true}).click();
+  await management.getByRole('button',{name:'Events Management',exact:true}).click();
+  await expectVisible(page.getByText('Event images and visibility require the pending database upgrade. Text events can still be saved.',{exact:true}));
+  assert(await page.locator('.admin-events input[type=file]').isDisabled());
+  await page.locator('.admin-events').getByLabel('Description',{exact:true}).fill('Legacy schema text-only event');
+  await page.locator('.admin-events').getByRole('button',{name:'Add Event',exact:true}).click();
+  await page.waitForFunction(()=>window.__smsaMock.tables.events.some(e=>e.description==='Legacy schema text-only event'));
+  assert(await page.evaluate(()=>{const event=window.__smsaMock.tables.events.find(e=>e.description==='Legacy schema text-only event');return !('image_url' in event) && !('enabled' in event) && event.title==='';}));
+  await page.evaluate(()=>{window.__smsaMock.missingEventExtensions=false;});
   console.log('Checking historical committee CMS and persistence');
   await management.getByRole('button',{name:'Committee Management',exact:true}).click();
   await page.getByRole('button',{name:'Prepare next committee year',exact:true}).click();
@@ -377,6 +408,7 @@ try {
   await expectVisible(page.locator('#committee .committee-card').first().getByText(/Previous Committee/));
   assert.deepEqual((await page.locator('#committee .committee-card h3').allTextContents()).slice(0,2),expectedPresidentNames);
   assert.equal(await page.locator('#committee .order-actions').count(),0);
+  assert.equal(await page.locator('#committee .committee-card').getByRole('heading',{name:'Fixture Chair',exact:true}).count(),0,'Other years never leak into selected committee');
   await page.locator('.account-control summary').click();await page.getByRole('button',{name:'Admin Dashboard',exact:true}).click();
   await management.getByRole('button',{name:'Committee Management',exact:true}).click();
   await page.getByLabel('Archive year',{exact:true}).selectOption(nextYear);
@@ -456,5 +488,5 @@ try {
   assert.deepEqual(blocked,[],'No unexpected external requests are permitted');
   assert(!blocked.some(host=>host.endsWith('supabase.co')),'No live Supabase request is permitted');
   console.log('Screenshots: '+path.resolve(screenshotRoot));
-  console.log('PASS: offline browser checks: continuous Home/About/Alumni/Committee/Events order, unchanged navbar, in-section year details/direct anchor/refresh/back-forward/scrollspy; responsive 320–1440px, profile-sourced mobile name, login/signup/confirmation Home redirect, member Admin-route denial, role-error resilience, reduced motion, 2s opacity fade, rail movement/hover/click, legacy batch members, uploader labels, 30-image cap and saved-only About content, optional-title slider upload/1.5s autoplay/5s manual pause, untitled description/image-only events and constraint errors, committee 2006+ archive/default hierarchy and proposed-backend position/member ordering, upload-to-public-approval association, zero-row denial and all-status moderation/delete, social footer, upload paths and no site-media deletion.');
+  console.log('PASS: offline browser checks: continuous Home/About/Events/Alumni/Committee order, unchanged navbar, isolated year details and dedicated archive/direct anchor/refresh/back-forward/scrollspy; responsive 320–1440px, profile-sourced mobile name, login/signup/confirmation Home redirect, member Admin-route denial, role-error resilience, reduced motion, 2s opacity fade, rail movement/hover/click, legacy batch members, uploader labels, 30-image cap and saved-only About content, optional-title slider upload/1.5s autoplay/5s manual pause, untitled description/image-only events and constraint errors, committee 2006+ archive/default hierarchy and proposed-backend position/member ordering, upload-to-public-approval association, zero-row denial and all-status moderation/delete, social footer, upload paths and no site-media deletion.');
 } finally { if(browser)await browser.close();await server.close();fs.rmdirSync(emptyEnv); }

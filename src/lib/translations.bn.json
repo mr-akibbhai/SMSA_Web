@@ -423,5 +423,8 @@
   "The Storage bucket does not allow this image type. Use JPEG, PNG or WebP.": "Storage bucket এই ধরনের ছবি গ্রহণ করে না। JPEG, PNG বা WebP ব্যবহার করুন।",
   "Your session is no longer valid. Please sign in again.": "আপনার সেশন আর কার্যকর নেই। আবার লগইন করুন।",
   "Position not recorded": "পদ উল্লেখ নেই",
-  "Event image": "অনুষ্ঠানের ছবি"
+  "Event image": "অনুষ্ঠানের ছবি",
+  "Back to Committee Archive": "কমিটি আর্কাইভে ফিরে যান",
+  "Committee year unavailable": "এই কমিটির বছর পাওয়া যায়নি",
+  "Event images and visibility require the pending database upgrade. Text events can still be saved.": "ইভেন্টের ছবি ও দৃশ্যমানতা ব্যবহারের জন্য ডেটাবেস আপগ্রেড প্রয়োজন। লেখা-ভিত্তিক ইভেন্ট সংরক্ষণ করতে পারবেন।"
 }

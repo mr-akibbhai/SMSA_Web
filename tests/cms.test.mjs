@@ -38,3 +38,8 @@ assert.equal(signedRequests,1,'Polling reuses unexpired URLs instead of re-signi
 await signedGalleryImages(signer,photos,cache,'member',2000);assert.equal(signedRequests,2,'Signed URL cache never crosses viewer scopes');
 await signedGalleryImages(signer,photos,cache,'public',3600000);assert.equal(signedRequests,3,'Expired URLs are refreshed');
 console.log('PASS: confirmed CMS writes/zero-row denial, event payloads, honest committee year archive, explicit batch identity, ownership/moderation filtering and exact gallery associations.');
+
+assert.deepEqual(eventPayload({description:'Legacy text',image_url:'unused',enabled:false},false),{title:'',description:'Legacy text',location:'',event_date:null});
+assert.throws(()=>eventPayload({image_url:'unused'},false));
+assert.equal(committeeYears([],2027).at(-1),2027);
+assert.equal(new Set(committeeYears([{committee_year:2026},{committee_year:2026}],2026)).size,21);

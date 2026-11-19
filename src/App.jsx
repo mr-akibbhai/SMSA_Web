@@ -150,6 +150,15 @@ export default function App() {
   }, [session?.user?.id]);
   const [profile, setProfile] = useState(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [eventExtensions,setEventExtensions]=useState(null);
+  useEffect(()=>{
+    if(!isAdmin || page!=='Admin' || route.panel!=='events')return;
+    let active=true;setEventExtensions(null);
+    supabase.from('events').select('image_url,enabled',{head:true}).then(({error})=>{
+      if(active)setEventExtensions(!error);
+    }).catch(()=>{if(active)setEventExtensions(false);});
+    return()=>{active=false;};
+  },[isAdmin,page,route.panel]);
   const [loading, setLoading] = useState(true);
   const [message, setMessageState] = useState("");
   function setMessage(value) {
@@ -175,7 +184,7 @@ export default function App() {
   const [committeeLayouts,setCommitteeLayouts]=useState([]);
   const [orderingAvailable,setOrderingAvailable]=useState(false);
   useEffect(()=>{
-    if(!committeeOrderingReady || !(publicView || page==='Admin' && route.panel==='committee'))return;
+    if(!committeeOrderingReady || !(publicView || page==='Committee' || page==='Admin' && route.panel==='committee'))return;
     let active=true;
     setOrderingAvailable(false);
     readCommitteeLayouts(supabase).then(layouts=>{if(active){setCommitteeLayouts(layouts);setOrderingAvailable(true);}}).catch(error=>{if(active)setOrderingAvailable(false);logDiagnostic(error);});
@@ -606,9 +615,26 @@ export default function App() {
 
   // NAVIGATION
   function selectCommittee(committee){
-    scrollTarget.current="Committee";
-    go({page:"Committee",committee,batch:null,gallery:null});
+    scrollTarget.current=null;
+    if(committee===null){
+      if(history.state?.returnToCommitteeArchive)history.back();
+      else go({page:'Committee',committee:'archive',batch:null,gallery:null});
+      return;
+    }
+    const rail=document.querySelector('#committee .auto-rail');
+    go({page:'Committee',committee,batch:null,gallery:null},false,{
+      route:{page:'Committee',committee:'archive'},
+      state:{committeeRail:rail?.scrollLeft || 0}
+    });
   }
+  useEffect(()=>{
+    if(page!=='Committee' || route.committee!=='archive')return;
+    const frame=requestAnimationFrame(()=>{
+      const rail=document.querySelector('#committee .auto-rail');
+      if(rail){rail.scrollLeft=history.state?.committeeRail || 0;rail.focus({preventScroll:true});}
+    });
+    return()=>cancelAnimationFrame(frame);
+  },[page,route.committee,homepageReady]);
   function navigate(name) {
     if (name === "Admin" && !isAdmin) {
       setMessage("Admin access required.");
@@ -1097,9 +1123,9 @@ export default function App() {
   function endCmsWrite(){cmsWriteLock.current=false;setAuthLoading(false);}
   // Confirm an affected row before reporting success; refresh failure never turns an insert into a retry insert.
   async function saveEvent(e) {
-    e.preventDefault();if(eventUploading || !beginCmsWrite())return;
+    e.preventDefault();if(eventUploading || eventExtensions===null || !beginCmsWrite())return;
     try {
-      const saved=await saveRecord(supabase,'events',eventPayload(eventForm),editingEvent);
+      const saved=await saveRecord(supabase,'events',eventPayload(eventForm,eventExtensions===true),editingEvent);
       setEditingEvent(saved.id);
       await loadPublicData('events');
       setEventForm(emptyEventForm);setEditingEvent(null);setMessage('Event saved.');
@@ -1172,7 +1198,7 @@ export default function App() {
   }
 
   // BATCH NAMES: DAKHIL-2006 TO CURRENT YEAR
-  const committeeArchiveYears=committeeYears([...committee,...committeeLayouts.map(layout=>({committee_year:layout.year}))],calendarYear,route.committee);
+  const committeeArchiveYears=committeeYears([...committee,...committeeLayouts.map(layout=>({committee_year:layout.year}))],calendarYear);
   const currentYear = calendarYear;
   const generatedBatchNames = Array.from({
     length: Math.max(0, currentYear - 2005)
@@ -1274,6 +1300,32 @@ export default function App() {
           </section>}
 
         {/* ALUMNI */}
+        {/* EVENTS */}
+        {publicView && <section id="events" className="page-section container">
+            <PageHeading label={t("STAY CONNECTED")} title={t("Events & Announcements")} />
+
+            <div className="event-grid">
+              {events.filter(event => event.enabled !== false).map(event => <article className="event-card" key={event.id}>
+                  <div className="event-icon">
+                    <CalendarDays size={28} />
+                  </div>
+
+                  {event.image_url && <img className="event-image" src={event.image_url} alt={event.title || t("Event image")} />}{event.title && <h3>{event.title}</h3>}
+                  {event.description && <p>{event.description}</p>}
+
+                  {event.event_date && <span>
+                      <Clock size={15} /> {event.event_date}
+                    </span>}
+
+                  {event.location && <span>
+                      <MapPin size={15} /> {event.location}
+                    </span>}
+                </article>)}
+
+              {events.filter(event => event.enabled !== false).length === 0 && <p className="empty-state">{t("No events have been published yet.")}</p>}
+            </div>
+          </section>}
+
         {(publicView || page === "Alumni") && <section id="alumni" className="page-section container">
             <PageHeading label={t("OUR NETWORK")} title={selectedBatch ? formatBatchName(selectedBatch) : t("Our Batches")} />
 
@@ -1372,45 +1424,18 @@ export default function App() {
           </section>}
 
         {/* COMMITTEE */}
-        {publicView && <section id="committee" className="page-section container">
-            <PageHeading label={t("LEADERSHIP")} title={t("Our Executive Committee")} />
+        {(publicView || page === "Committee") && <section id="committee" className="page-section container">
+            <PageHeading label={t("LEADERSHIP")} title={!route.committee || route.committee==='archive' ? t('Our Executive Committee') : /^\d{4}$/.test(route.committee) && Number(route.committee)>=1900 && Number(route.committee)<=2200 ? t('Committee of')+' '+route.committee : route.committee==='undated' ? t('Year not recorded') : route.committee==='current' ? t('Current Committee') : t('Committee year unavailable')} />
 
             <p className="archive-explanation">{t('Year cards are an archive index. An empty year does not confirm that a committee existed.')}</p>
-            {!route.committee ? <AutoRail label={t('Committee years')}>
-              <button className="batch-card" onClick={()=>selectCommittee('current')}><ShieldCheck size={35}/><h3>{t('Current Committee')}</h3><p>{committeeForGroup(committee,'current').length} {t('Verified member records')}</p></button>
+            {!route.committee || route.committee==='archive' ? <AutoRail label={t('Committee years')}>
               {committeeArchiveYears.map(year=><button className="batch-card" key={year} onClick={()=>selectCommittee(String(year))}><CalendarDays size={32}/><h3>{t('Committee of')} {year}</h3>{committeeForGroup(committee,year).some(member=>member.is_current!==false) && <small>{t('Current Committee')}</small>}{committeeForGroup(committee,year).some(member=>member.is_current===false) && <small>{t('Previous Committee')}</small>}<p>{committeeForGroup(committee,year).length ? committeeForGroup(committee,year).length+' '+t('Verified member records') : t('No verified records yet')}</p></button>)}
               {committee.some(m=>!m.committee_year) && <button className="batch-card" onClick={()=>selectCommittee('undated')}><h3>{t('Year not recorded')}</h3></button>}
-            </AutoRail> : <><button className="btn-outline" onClick={()=>selectCommittee(null)}>{t('Back')}</button><h2>{route.committee==='current' ? t('Current Committee') : route.committee==='undated' ? t('Year not recorded') : t('Committee of')+' '+route.committee}</h2>
+            </AutoRail> : <><button className="btn-outline" onClick={()=>selectCommittee(null)}>{t('Back to Committee Archive')}</button>
               <div className="committee-grid">{arrangedCommittee(committeeForGroup(committee,route.committee),committeeLayouts).map(m=><article className="committee-card" key={m.id}>{m.photo_url && <img className="image-preview" src={m.photo_url} alt={m.name}/>}<h3>{m.name}</h3><strong>{m.position}</strong><p>{formatBatchName(m.batch)}</p><p className="preserve-lines">{m.introduction}</p><small>{m.committee_year || t('Year not recorded')} · {t(m.is_current!==false ? 'Current Committee' : 'Previous Committee')}</small></article>)}</div>
               {!committeeForGroup(committee,route.committee).length && <p className="empty-state">{t('No verified committee records are available for this year.')}</p>}
             </>}
 
-          </section>}
-
-        {/* EVENTS */}
-        {publicView && <section id="events" className="page-section container">
-            <PageHeading label={t("STAY CONNECTED")} title={t("Events & Announcements")} />
-
-            <div className="event-grid">
-              {events.filter(event => event.enabled !== false).map(event => <article className="event-card" key={event.id}>
-                  <div className="event-icon">
-                    <CalendarDays size={28} />
-                  </div>
-
-                  {event.image_url && <img className="event-image" src={event.image_url} alt={event.title || t("Event image")} />}{event.title && <h3>{event.title}</h3>}
-                  {event.description && <p>{event.description}</p>}
-
-                  {event.event_date && <span>
-                      <Clock size={15} /> {event.event_date}
-                    </span>}
-
-                  {event.location && <span>
-                      <MapPin size={15} /> {event.location}
-                    </span>}
-                </article>)}
-
-              {events.filter(event => event.enabled !== false).length === 0 && <p className="empty-state">{t("No events have been published yet.")}</p>}
-            </div>
           </section>}
 
         {/* BATCH GALLERY */}
@@ -1948,13 +1973,14 @@ export default function App() {
             }}>
                   <h3>{t("Manage Events")}</h3>
 
-                  <form onSubmit={saveEvent}><fieldset disabled={authLoading || eventUploading}><label className="checkbox-label"><input type="checkbox" checked={eventForm.enabled} onChange={e => setEventForm({
+                  {eventExtensions===false && <p role="status">{t('Event images and visibility require the pending database upgrade. Text events can still be saved.')}</p>}
+                  <form onSubmit={saveEvent}><fieldset disabled={authLoading || eventUploading || eventExtensions===null}><fieldset disabled={eventExtensions!==true}><label className="checkbox-label"><input type="checkbox" checked={eventForm.enabled} onChange={e => setEventForm({
                     ...eventForm,
                     enabled: e.target.checked
                   })} />{t("Publicly visible")}</label><ImageUpload userId={session?.user.id} admin onBusy={setEventUploading} onUploaded={image_url => setEventForm(d => ({
                   ...d,
                   image_url
-                }))} />{eventForm.image_url && <><img className="image-preview" src={eventForm.image_url} alt={t("Event preview")} /><button type="button" className="btn-outline" onClick={() => setEventForm(d => ({...d,image_url:""}))}>{t("Remove image")}</button></>}
+                }))} />{eventForm.image_url && <><img className="image-preview" src={eventForm.image_url} alt={t("Event preview")} /><button type="button" className="btn-outline" onClick={() => setEventForm(d => ({...d,image_url:""}))}>{t("Remove image")}</button></>}</fieldset>
                     <label>{t("Event Title")}</label>
                     <input value={eventForm.title} onChange={e => setEventForm({
                   ...eventForm,

@@ -10,5 +10,5 @@ for(const [panel,operation] of [['batches','createBatch'],['gallery','reviewGall
 assert.ok(memberHandler,'Edit must navigate to the selected member editor');
 console.log('PASS: isolated admin panel ownership and member edit navigation');
 const sectionIds=[];
-traverse(ast,{JSXOpeningElement(path){if(path.node.name.name==='section'){const id=path.node.attributes.find(a=>a.name?.name==='id')?.value?.value;if(['home','about','alumni','committee','events'].includes(id))sectionIds.push(id);}}});
-assert.deepEqual(sectionIds,['home','about','alumni','committee','events'],'Homepage source keeps Alumni and independent Committee adjacent');
+traverse(ast,{JSXOpeningElement(path){if(path.node.name.name==='section'){const id=path.node.attributes.find(a=>a.name?.name==='id')?.value?.value;if(['home','about','events','alumni','committee'].includes(id))sectionIds.push(id);}}});
+assert.deepEqual(sectionIds,['home','about','events','alumni','committee'],'Homepage source keeps Alumni and independent Committee adjacent');

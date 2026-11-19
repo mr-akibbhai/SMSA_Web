@@ -14,9 +14,10 @@ export async function deleteRecord(client, table, id) {
   if (data?.id == null || String(data.id) !== String(id)) throw missingRow();
   return data;
 }
-export function eventPayload(draft) {
+export function eventPayload(draft,extended=true) {
+  if(!extended)draft={...draft,image_url:null};
   if(![draft.title,draft.description,draft.event_date,draft.location,draft.image_url].some(value=>String(value || '').trim()))throw new Error('Add event information or an image before saving.');
-  return {title:draft.title?.trim() || '',description:draft.description || '',image_url:draft.image_url || null,location:draft.location || '',event_date:draft.event_date || null,enabled:draft.enabled !== false};
+  return {title:draft.title?.trim() || '',description:draft.description || '',location:draft.location || '',event_date:draft.event_date || null,...(extended ? {image_url:draft.image_url || null,enabled:draft.enabled !== false} : {})};
 }
 export function committeePayload(draft) {
   if (!draft.name?.trim() || !draft.position?.trim()) throw new Error('Member name and position are required.');
@@ -31,6 +32,7 @@ export function committeeYears(members, currentYear=new Date().getFullYear(), se
 export function committeeForGroup(members, group) {
   if(group === 'current')return members.filter(m=>m.is_current !== false);
   if(group === 'undated')return members.filter(m=>!m.committee_year);
+  if(!/^\d{4}$/.test(String(group)) || Number(group)<1900 || Number(group)>2200)return [];
   return members.filter(m=>m.committee_year != null && String(m.committee_year) === String(group));
 }
 export function visibleGalleryRows(rows, batchId, userId, admin=false) {

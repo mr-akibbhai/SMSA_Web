@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 const initial = {page:'Home',batch:null,gallery:null,committee:null,panel:'overview',memberBatch:null,adminBatch:null,search:'',editMember:null,authMode:'choose',loginType:'member'};
 // Scrolling order is independent of the existing navbar presentation order.
-export const HOMEPAGE_SECTIONS=['Home','About','Alumni','Committee','Events'];
+export const HOMEPAGE_SECTIONS=['Home','About','Events','Alumni','Committee'];
 export function isHomepageRoute(route){
-  return HOMEPAGE_SECTIONS.includes(route.page) && !(route.page==='Alumni' && route.batch);
+  return HOMEPAGE_SECTIONS.includes(route.page) && !(route.page==='Alumni' && route.batch) && !(route.page==='Committee' && route.committee);
 }
 export function activeHomepageSection(tops,offset,atBottom=false){
   let active='Home';
@@ -61,18 +61,19 @@ export function useAppRoute() {
     window.addEventListener('popstate',pop);window.addEventListener('hashchange',pop);
     return()=>{cancelAnimationFrame(frame);history.scrollRestoration=restoration;window.removeEventListener('popstate',pop);window.removeEventListener('hashchange',pop);};
   },[]);
-  const go=useCallback((patch,replace=false)=>{
-    pending.current={patch:{...pending.current?.patch,...patch},replace:(pending.current?.replace ?? true) && replace};
+  const go=useCallback((patch,replace=false,parent=null)=>{
+    pending.current={parent:parent || pending.current?.parent,patch:{...pending.current?.patch,...patch},replace:(pending.current?.replace ?? true) && replace};
     if(scheduled.current)return; scheduled.current=true;
     queueMicrotask(()=>{
       scheduled.current=false; const change=pending.current; pending.current=null;if(!change)return;
       const next=normalizeRoute({...current.current,...change.patch});
       if(JSON.stringify(next)===JSON.stringify(current.current))return;
-      history.replaceState({...history.state,smsaRoute:current.current,scrollY:window.scrollY},'',location.href);
+      const previous=change.parent ? normalizeRoute(change.parent.route) : current.current;
+      history.replaceState({...history.state,...change.parent?.state,smsaRoute:previous,scrollY:change.parent ? 0 : window.scrollY},'',change.parent ? '#'+encodeURIComponent(JSON.stringify(previous)) : location.href);
       const shareable={...next,gallery:next.gallery ? {name:next.gallery.name,...(next.gallery.id == null ? {} : {id:next.gallery.id})}:null};
       const url='#'+encodeURIComponent(JSON.stringify(shareable));
       const continuous=isHomepageRoute(current.current) && isHomepageRoute(next);
-      history[change.replace?'replaceState':'pushState']({smsaRoute:next,scrollY:isHomepageRoute(next)?null:0},'',url);
+      history[change.replace?'replaceState':'pushState']({smsaRoute:next,returnToCommitteeArchive:Boolean(change.parent),scrollY:isHomepageRoute(next)?null:0},'',url);
       current.current=next;setRoute(next);
       if(!change.replace && !continuous)window.scrollTo({top:0,behavior:'instant'});
     });
