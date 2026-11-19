@@ -2,7 +2,8 @@ import { useLanguage } from "../lib/i18n";
 import { friendlyMessage, logDiagnostic } from '../lib/notifications';
 import { useEffect, useState, useRef } from 'react';
 import { supabase } from '../lib/supabase';
-import { saveSiteContent, validateImage, compareDisplayOrder } from '../lib/domain';
+import { saveSiteContent, validateImage } from '../lib/domain';
+import { useReducedMotion } from './Experience';
 export function safeLink(value) {
   try {
     const url = new URL(value);
@@ -14,22 +15,27 @@ export function safeLink(value) {
 export function ImageUpload({
   userId,
   admin = false,
-  onUploaded
+  onUploaded,
+  onBusy = () => {}
 }) {
   const {
     t
   } = useLanguage();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [preview, setPreview] = useState('');
+  useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
   return <div className="upload-field"><label>{t("Upload image (JPEG, PNG or WebP, maximum 10 MB)")}<input type="file" accept="image/jpeg,image/png,image/webp" disabled={busy} onChange={async e => {
         const file = e.target.files?.[0];
         if (!file) return;
         setError('');
         setBusy(true);
+        onBusy(true);
         try {
           if (!userId) throw new Error('Please sign in first.');
           const validation = validateImage(file);
           if (validation) throw new Error(validation);
+          setPreview(URL.createObjectURL(file));
           const path = `${admin ? 'admin' : userId}/${crypto.randomUUID()}.${file.type.split('/')[1]}`;
           const {
             error
@@ -45,9 +51,10 @@ export function ImageUpload({
           logDiagnostic(err), setError(friendlyMessage(err));
         } finally {
           setBusy(false);
+          onBusy(false);
           e.target.value = '';
         }
-      }} /></label>{busy && <p role="status">{t("Uploading\u2026")}</p>}{error && <p role="alert">{t(error)}</p>}</div>;
+      }} /></label>{preview && <img className="image-preview" src={preview} alt={t('Selected upload')} />}{busy && <p role="status">{t("Uploading\u2026")}</p>}{error && <p role="alert">{t(error)}</p>}</div>;
 }
 export function useSiteContent() {
   const sequence = useRef(0);
@@ -59,14 +66,14 @@ export function useSiteContent() {
     const {
       data,
       error
-    } = await supabase.from('site_content').select('*').order('display_order').order('created_at').order('id');
+    } = await supabase.from('site_content').select('*').order('created_at').order('id');
     if (request !== sequence.current) return;
     if (error) {
       setError('Additional website content is unavailable. Please retry; the database setup may be pending.');
       return;
     }
     setError('');
-    setItems((data || []).sort(compareDisplayOrder));
+    setItems(data || []);
   }
   return {
     items,
@@ -81,13 +88,16 @@ export function ContentCard({
   return <article className="content-card managed-card">{safeLink(item.image_url) && <img loading="lazy" src={item.image_url} alt={item.title || 'SMSA'} />}
     <h3>{item.title}</h3><p className="preserve-lines">{item.description}</p></article>;
 }
+function SocialIcon({ messenger }) {
+  return <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true">{messenger ? <path d="M12 2C6.5 2 2 6.1 2 11.2c0 2.9 1.5 5.5 3.8 7.2V22l3.5-1.9c.9.2 1.8.3 2.7.3 5.5 0 10-4.1 10-9.2S17.5 2 12 2Zm1 12.4-2.6-2.8-5.1 2.8 5.6-6 2.7 2.8 5-2.8-5.6 6Z" /> : <path d="M14 22v-9h3l.5-3.5H14V7.3c0-1 .3-1.7 1.7-1.7h1.9V2.5c-.3 0-1.5-.2-2.8-.2-2.8 0-4.6 1.7-4.6 4.8v2.4H7V13h3.2v9H14Z" />}</svg>;
+}
 export function CommunityLinks({
   items
 }) {
   const {
     t
   } = useLanguage();
-  return <div className="community-links">{items.filter(i => i.kind === 'social' && i.enabled && safeLink(i.url)).map(i => <a className="btn-outline" href={safeLink(i.url)} key={i.id} target="_blank" rel="noopener noreferrer"><span aria-hidden="true">{i.key === 'facebook' ? t("\u24D5") : t("\u2709")}</span> {i.title || (i.key === 'facebook' ? t("Facebook Group") : t("Messenger Group"))}</a>)}</div>;
+  return <div className="community-links">{items.filter(i => i.kind === 'social' && ['facebook','messenger'].includes(i.key) && i.enabled && safeLink(i.url)).map(i => <a className="social-link" href={safeLink(i.url)} key={i.id} target="_blank" rel="noopener noreferrer"><SocialIcon messenger={i.key === 'messenger'} />{i.title || (i.key === 'facebook' ? t("Facebook Group") : t("Messenger Group"))}</a>)}</div>;
 }
 export function Carousel({
   items
@@ -98,12 +108,13 @@ export function Carousel({
   const slides = items.filter(i => i.kind === 'carousel' && i.enabled && safeLink(i.image_url));
   const [index, setIndex] = useState(0);
   const [paused, setPaused] = useState(false);
+  const reducedMotion = useReducedMotion();
   const current = slides.length ? index % slides.length : 0;
   useEffect(() => {
-    if (paused || slides.length < 2 || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    if (paused || slides.length < 2 || reducedMotion) return;
     const timer = setInterval(() => setIndex(i => (i + 1) % slides.length), 6000);
     return () => clearInterval(timer);
-  }, [slides.length, paused]);
+  }, [slides.length, paused, reducedMotion]);
   if (!slides.length) return null;
   return <section className="home-carousel container" aria-label={t("SMSA highlights")} aria-roledescription="carousel" onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)} onFocusCapture={() => setPaused(true)}>
     <div className="carousel-window"><div className="carousel-track" style={{
@@ -119,28 +130,31 @@ const blank = {
   description: '',
   image_url: '',
   url: '',
-  enabled: true,
-  display_order: 0
+  enabled: true
 };
 export function ContentManager({
   content,
   userId,
-  batchNames
+  batchNames,
+  kinds = ['official', 'batch', 'social', 'carousel', 'about']
 }) {
   const {
     t
   } = useLanguage();
-  const [draft, setDraft] = useState(blank);
+  const fresh = () => ({...blank, kind:kinds[0], key:kinds[0] === 'official' ? 'smsa' : ''});
+  const [draft, setDraft] = useState(fresh);
   const [busy, setBusy] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [message, setMessage] = useState('');
   async function save(e) {
     e.preventDefault();
+    if (busy || uploading) return;
     setBusy(true);
     setMessage('');
     try {
       if (draft.kind === 'social' && draft.url && !safeLink(draft.url)) throw new Error('Use a complete HTTPS community URL.');
       await saveSiteContent(supabase, draft);
-      setDraft(blank);
+      setDraft(fresh());
       await content.reload();
       setMessage('Content saved.');
     } catch (err) {
@@ -149,14 +163,14 @@ export function ContentManager({
       setBusy(false);
     }
   }
-  return <div className="content-card"><h3>{t("Website Content Management")}</h3><p>{t("Official SMSA Profile \xB7 Batch Profiles \xB7 Social Media & Community Links \xB7 Homepage Carousel \xB7 About Images")}</p>
+  return <div className="content-card"><h3>{t(kinds[0] === "batch" ? "Batch Profiles" : "Brand & Highlights")}</h3>
     {content.error && <p role="alert">{t(content.error)}</p>}<form onSubmit={save}>
-    <label>{t("Content type")}<select value={draft.kind} onChange={e => setDraft({
+    <fieldset disabled={busy || uploading}><label>{t("Content type")}<select value={draft.kind} onChange={e => setDraft({
           ...blank,
           id: draft.id,
           kind: e.target.value,
           key: e.target.value === 'official' ? 'smsa' : ''
-        })}><option value="official">{t("Official SMSA Profile")}</option><option value="batch">{t("Batch Profile")}</option><option value="social">{t("Social Media & Community Links")}</option><option value="carousel">{t("Homepage Carousel")}</option><option value="about">{t("About Images")}</option></select></label>
+        })}>{kinds.map(kind => <option key={kind} value={kind}>{t({official:'Official SMSA Profile',batch:'Batch Profile',social:'Social Media & Community Links',carousel:'Homepage Carousel',about:'About Images'}[kind])}</option>)}</select></label>
     {draft.kind === 'batch' ? <label>{t("Batch")}<select required value={draft.key} onChange={e => setDraft({
           ...draft,
           key: e.target.value
@@ -180,20 +194,16 @@ export function ContentManager({
           })} /></label><ImageUpload userId={userId} admin onUploaded={image_url => setDraft(d => ({
           ...d,
           image_url
-        }))} />{draft.image_url && <img className="image-preview" src={draft.image_url} alt={t("Selected upload")} />}<button type="button" onClick={() => setDraft({
+        }))} onBusy={setUploading} />{draft.image_url && <img className="image-preview" src={draft.image_url} alt={t("Selected upload")} />}<button type="button" onClick={() => setDraft({
           ...draft,
           image_url: ''
         })}>{t("Remove image from content")}</button></>}
-    <label>{t("Display order")}<input type="number" value={draft.display_order} onChange={e => setDraft({
-          ...draft,
-          display_order: Number(e.target.value)
-        })} /></label>
     <label className="checkbox-label"><input type="checkbox" checked={draft.enabled} onChange={e => setDraft({
           ...draft,
           enabled: e.target.checked
         })} />{t("Publicly visible")}</label>
-    <button className="btn-primary" disabled={busy}>{t("Save content")}</button> <button type="button" className="btn-outline" onClick={() => setDraft(blank)}>{t("Cancel / New")}</button></form><p role="status">{t(message)}</p>
-    {content.items.map(item => <div className="pending-row" key={item.id}><span>{t(item.kind)}{t(":") + " "}{item.title}{t("(")}{item.enabled ? t("Visible") : t("Hidden")}{t(")")}</span><div className="pending-actions"><button onClick={() => setDraft(item)}>{t("Edit")}</button><button disabled={busy} onClick={async () => {
+    <button className="btn-primary" disabled={busy || uploading}>{t(busy ? 'Saving...' : 'Save content')}</button> <button type="button" className="btn-outline" onClick={() => setDraft(fresh())}>{t("Cancel / New")}</button></fieldset></form><p role="status">{t(message)}</p>
+    {content.items.filter(item => kinds.includes(item.kind)).map(item => <div className="pending-row" key={item.id}><span>{t(item.kind)}{t(":") + " "}{item.title}{t("(")}{item.enabled ? t("Visible") : t("Hidden")}{t(")")}</span><div className="pending-actions"><button disabled={busy || uploading} onClick={() => setDraft(item)}>{t("Edit")}</button><button disabled={busy || uploading} onClick={async () => {
           if (!window.confirm(t('Delete this content record?'))) return;
           setBusy(true);
           const {
@@ -201,7 +211,7 @@ export function ContentManager({
           } = await supabase.from('site_content').delete().eq('id', item.id);
           if (error) logDiagnostic(error), setMessage(friendlyMessage(error));else {
             await content.reload();
-            setDraft(blank);
+            setDraft(fresh());
           }
           setBusy(false);
         }}>{t("Delete")}</button></div></div>)}

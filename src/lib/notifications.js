@@ -1,5 +1,6 @@
 // Only interface messages on this allowlist may reach a visitor verbatim.
 export const knownMessages = new Set([
+ 'This batch has linked content. Keep its existing name.',
  'Photo removed from the gallery. Image cleanup could not finish; please contact the administrator.','Please enter a whole number for display order.','Please sign in first.','Please choose a JPEG, PNG or WebP image.','Please select an image smaller than 10 MB.',
  'Please enter a valid phone number.','Your changes have been saved.','Content saved.','Member profile updated.',
  'Profile saved successfully.','Photo approved successfully.','Photo rejected successfully.','Photo deleted successfully.',

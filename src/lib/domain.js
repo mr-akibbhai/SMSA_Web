@@ -33,8 +33,8 @@ export async function saveSiteContent(client, draft) {
 export function batchUpdatePayload(batch,name,order){
  const canonical=formatBatchName(name);
  if(!canonical)throw new Error('Please enter a batch name.');
- if(!Number.isInteger(Number(order)))throw new Error('Please enter a whole number for display order.');
- return {name:canonical===formatBatchName(batch.name)?batch.name:canonical,display_order:Number(order)};
+ if(order !== undefined && !Number.isInteger(Number(order)))throw new Error('Please enter a whole number for display order.');
+ return {name:canonical===formatBatchName(batch.name)?batch.name:canonical,...(order === undefined ? {} : {display_order:Number(order)})};
 }
 export async function updateMemberProfile(client,person){
  if(!person?.id)throw new Error('Please refresh the member list and try again.');

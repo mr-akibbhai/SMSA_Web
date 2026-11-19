@@ -1,5 +1,5 @@
 import { useLanguage } from "./lib/i18n";
-import { useEffect, useRef, useState, useId } from "react";
+import { useEffect, useRef, useState, useId, lazy, Suspense } from "react";
 import { X, Users, GraduationCap, CalendarDays, ShieldCheck, LogIn, LogOut, UserCircle, ArrowRight, Heart, Search, Clock, MapPin, KeyRound, Trash2, Edit, Plus, Save, Ban, RefreshCw, ChevronLeft, Layers, Image, Upload, CheckCircle, XCircle } from "lucide-react";
 import { supabase } from "./lib/supabase";
 import { useAppRoute } from "./lib/navigation";
@@ -7,9 +7,14 @@ import { LanguageToggle, FormAccessibility } from "./lib/i18n";
 import { friendlyMessage, logDiagnostic } from "./lib/notifications";
 import BatchEditor from "./components/BatchEditor";
 import { AutoRail, AboutSlideshow } from "./components/Experience";
-import { formatBatchName, compareDisplayOrder, validateImage, validatePhone, updateMemberProfile, deleteGalleryRecord } from "./lib/domain";
-import { ImageUpload, useSiteContent, ContentManager, ContentCard, CommunityLinks, Carousel, CommitteeHistory } from './components/ContentFeatures';
-const navItems = ["Home", "About", "Events", "Alumni", "Gallery", "Committee"];
+import { formatBatchName, validateImage, validatePhone, updateMemberProfile, deleteGalleryRecord } from "./lib/domain";
+import { ImageUpload, useSiteContent, ContentManager, CommunityLinks, Carousel } from './components/ContentFeatures';
+const managementComponent = name => lazy(() => import('./components/Management').then(module => ({default:module[name]})));
+const DashboardNavigation = managementComponent('DashboardNavigation');
+const DashboardOverview = managementComponent('DashboardOverview');
+const AboutManager = managementComponent('AboutManager');
+const SocialLinksManager = managementComponent('SocialLinksManager');
+const navItems = ["Home", "About", "Events", "Alumni", "Committee"];
 const emptyForm = {
   full_name: "",
   address: "",
@@ -25,7 +30,6 @@ const emptyEventForm = {
   description: "",
   event_date: "",
   image_url: "",
-  display_order: 0,
   enabled: true,
   location: ""
 };
@@ -36,8 +40,7 @@ const emptyCommitteeForm = {
   photo_url: "",
   introduction: "",
   committee_year: new Date().getFullYear(),
-  is_current: true,
-  display_order: 0
+  is_current: true
 };
 export default function App() {
   const {
@@ -45,6 +48,13 @@ export default function App() {
   } = useLanguage();
   const content = useSiteContent();
   const accountLoad = useRef(0);
+  const publicLoad = useRef(0);
+  const accountUser = useRef(null);
+  const authEpoch = useRef(0);
+  const authAttempt = useRef(false);
+  const [eventUploading, setEventUploading] = useState(false);
+  const [committeeUploading, setCommitteeUploading] = useState(false);
+  const [galleryFilter, setGalleryFilter] = useState("pending");
   const {
     route,
     go,
@@ -74,17 +84,17 @@ export default function App() {
   const navbarRef = useRef(null);
   const navRef = useRef(null);
   const scrollTarget = useRef(null);
-  const publicView = ["Home", "About", "Events"].includes(page);
+  const publicView = ["Home", "About", "Events"].includes(page) || (page === "Alumni" && !selectedBatch);
   useEffect(() => {
-    if (!publicView) return;
     let frame;
     const update = () => {
+      if (!publicView) return;
       const offset = (navbarRef.current?.offsetHeight || 80) + 24;
       let current = "Home";
       for (const name of navItems) {
         if (document.getElementById(name.toLowerCase())?.getBoundingClientRect().top <= offset) current = name;
       }
-      if (window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 2) current = "Events";
+      if (window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 2) current = "Alumni";
       setActiveSection(current);
     };
     const onScroll = () => {
@@ -124,7 +134,7 @@ export default function App() {
       left: nav.scrollLeft + item.getBoundingClientRect().left - nav.getBoundingClientRect().left - (nav.clientWidth - item.offsetWidth) / 2,
       behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth"
     });
-  }, [activeSection, publicView]);
+  }, [activeSection, publicView, page]);
   const [session, setSession] = useState(null);
   useEffect(() => {
     content.reload();
@@ -213,15 +223,16 @@ export default function App() {
     }
     let mounted = true;
     async function initialize() {
+      const epoch = authEpoch.current;
       const {
         data,
         error
       } = await supabase.auth.getSession();
       if (error) setMessage(error.message);
-      if (mounted && data?.session) {
+      if (mounted && epoch === authEpoch.current && data?.session) {
         setSession(data.session);
         await loadAccount(data.session.user);
-      } else if (mounted) {
+      } else if (mounted && epoch === authEpoch.current) {
         setLoading(false);
       }
       if (mounted) {
@@ -238,20 +249,23 @@ export default function App() {
       data: listener
     } = supabase.auth.onAuthStateChange((event, newSession) => {
       if (!mounted) return;
+      if (["SIGNED_IN","SIGNED_OUT","USER_UPDATED","TOKEN_REFRESHED","PASSWORD_RECOVERY"].includes(event)) authEpoch.current++;
       if (event === "PASSWORD_RECOVERY") {
         setSession(newSession);
         setPage("ResetPassword");
         setLoading(false);
         return;
       }
-      if (event === "SIGNED_IN" && newSession) {
+      if (["SIGNED_IN","USER_UPDATED","TOKEN_REFRESHED"].includes(event) && newSession) {
         setSession(newSession);
+        const epoch = authEpoch.current;
         setTimeout(() => {
-          if (mounted) loadAccount(newSession.user).catch(error => setMessage(error.message));
+          if (mounted && epoch === authEpoch.current && !authAttempt.current) loadAccount(newSession.user).catch(error => setMessage(error.message));
         }, 0);
       }
       if (event === "SIGNED_OUT") {
         accountLoad.current++;
+        accountUser.current = null;
         setSession(null);
         setProfile(null);
         setForm(emptyForm);
@@ -260,11 +274,13 @@ export default function App() {
         setPendingGallery([]);
         setGalleryPhotos([]);
         setPage("Home");
+        loadPublicData(); content.reload();
         setLoading(false);
       }
     });
     return () => {
       mounted = false;
+      accountLoad.current++;
       listener.subscription.unsubscribe();
     };
   }, []);
@@ -272,7 +288,9 @@ export default function App() {
   // PUBLIC DATA
   async function loadPublicData() {
     if (!supabase) return;
-    const [a, e, c] = await Promise.all([supabase.from("public_alumni").select("*"), supabase.from("events").select("*").order("event_date"), supabase.from("committee_members").select("*").order("display_order")]);
+    const request = ++publicLoad.current;
+    const [a, e, c] = await Promise.all([supabase.from("public_alumni").select("*"), supabase.from("events").select("*").order("event_date"), supabase.from("committee_members").select("*").order("name")]);
+    if (request !== publicLoad.current) return;
     if (a.error) {
       console.error("Alumni Loading Error:", a.error);
     } else {
@@ -281,12 +299,12 @@ export default function App() {
     if (e.error) {
       console.error("Events Loading Error:", e.error);
     } else {
-      setEvents((e.data || []).sort(compareDisplayOrder));
+      setEvents(e.data || []);
     }
     if (c.error) {
       console.error("Committee Loading Error:", c.error);
     } else {
-      setCommittee((c.data || []).sort(compareDisplayOrder));
+      setCommittee(c.data || []);
     }
   }
   // LOAD BATCHES
@@ -301,7 +319,7 @@ export default function App() {
         ascending: true
       });
       if (error) throw error;
-      setBatches((data || []).sort(compareDisplayOrder));
+      setBatches(data || []);
     } catch (error) {
       setMessage("Could not load batches: " + error.message);
     } finally {
@@ -363,7 +381,7 @@ export default function App() {
       const {
         data,
         error
-      } = await supabase.from("gallery_photos").select("*").eq("status", "pending").order("created_at", {
+      } = await supabase.from("gallery_photos").select("*").order("created_at", {
         ascending: false
       });
       if (error) throw error;
@@ -500,17 +518,19 @@ export default function App() {
   async function loadAccount(user) {
     if (!supabase || !user) return;
     const requestId = ++accountLoad.current;
-    setIsAdmin(false);
-    setProfile(null);
+    if (accountUser.current !== user.id) {
+      setIsAdmin(false); setProfile(null); setMembers([]); setPendingGallery([]);
+      accountUser.current = user.id;
+    }
     setLoading(true);
     try {
       const [p, r] = await Promise.all([supabase.from("profiles").select("*").eq("id", user.id).maybeSingle(), supabase.from("user_roles").select("role").eq("user_id", user.id).maybeSingle()]);
       if (p.error) throw p.error;
-      if (r.error) throw r.error;
       if (requestId !== accountLoad.current) return;
       const admin = r.data?.role === "admin";
       setIsAdmin(admin);
       setProfile(p.data || null);
+      if (r.error) { setIsAdmin(false); throw r.error; }
       if (p.data) {
         setForm({
           ...emptyForm,
@@ -524,8 +544,9 @@ export default function App() {
         });
       }
       if (admin) {
-        await Promise.all([loadAdminData(), loadBatches(), loadPendingGallery(true)]);
+        await Promise.all([loadAdminData(), loadBatches(), loadPendingGallery(true), loadPublicData(), content.reload()]);
       } else {
+        setMembers([]);
         setPendingGallery([]);
       }
     } catch (error) {
@@ -641,6 +662,7 @@ export default function App() {
   // MEMBER REGISTRATION
   async function registerMember(e) {
     e.preventDefault();
+    if (authAttempt.current) return;
     setMessage("");
     if (loginType !== "member") {
       setMessage("Only members can register.");
@@ -665,6 +687,7 @@ export default function App() {
       return;
     }
     setAuthLoading(true);
+    authAttempt.current = true;
     try {
       const {
         data,
@@ -681,6 +704,7 @@ export default function App() {
       if (error) throw error;
       if (!data.user) throw new Error("Registration failed.");
       if (!data.session) {
+        navigate("Home"); setPassword(""); setConfirmPassword("");
         setMessage("Account created. Check your email to confirm your account, then sign in and complete your profile.");
         return;
       }
@@ -695,20 +719,20 @@ export default function App() {
         batch: formatBatchName(form.batch),
         full_name: form.full_name.trim(),
         address: (form.address || "").trim() || null,
-        passing_year: profile ? profile.passing_year : Number(formatBatchName(form.batch).match(/\d{4}$/)?.[0]) || null,
-        approval_status: "approved"
+        passing_year: profile ? profile.passing_year : Number(formatBatchName(form.batch).match(/\d{4}$/)?.[0]) || null
       });
       if (profileError) throw profileError;
       setPassword("");
       setConfirmPassword("");
-      setPassword("");
       setSession(data.session);
+      navigate("Home");
       await loadAccount(data.user);
       await loadPublicData();
       setMessage("Member registration successful.");
     } catch (error) {
       setMessage("Registration error: " + error.message);
     } finally {
+      authAttempt.current = false;
       setAuthLoading(false);
     }
   }
@@ -716,6 +740,8 @@ export default function App() {
   // LOGIN
   async function login(e) {
     e.preventDefault();
+    if (authAttempt.current) return;
+    authAttempt.current = true;
     setMessage("");
     setAuthLoading(true);
     try {
@@ -752,11 +778,14 @@ export default function App() {
         return;
       }
       setSession(data.session);
+      setPassword("");
+      navigate("Home");
       await loadAccount(data.user);
       setMessage(userIsAdmin ? "Admin login successful." : "Member login successful.");
     } catch (error) {
       setMessage("Login failed: " + error.message);
     } finally {
+      authAttempt.current = false;
       setAuthLoading(false);
     }
   }
@@ -850,8 +879,7 @@ export default function App() {
         batch: formatBatchName(form.batch),
         full_name: form.full_name.trim(),
         address: (form.address || "").trim() || null,
-        passing_year: form.passing_year ? Number(form.passing_year) : Number(formatBatchName(form.batch).match(/\d{4}$/)?.[0]) || null,
-        approval_status: profile?.approval_status || "approved"
+        passing_year: profile ? profile.passing_year : Number(formatBatchName(form.batch).match(/\d{4}$/)?.[0]) || null
       }).select().single();
       if (error) throw error;
       setProfile(data);
@@ -1032,7 +1060,7 @@ export default function App() {
   // ADMIN: EVENTS
   async function saveEvent(e) {
     e.preventDefault();
-    if (!isAdmin || authLoading) return;
+    if (!isAdmin || authLoading || eventUploading) return;
     setAuthLoading(true);
     try {
       const eventData = {
@@ -1055,6 +1083,7 @@ export default function App() {
     }
   }
   async function deleteEvent(id) {
+    if (authLoading || eventUploading) return;
     if (!isAdmin || !window.confirm(t("Delete this event?"))) return;
     const {
       error
@@ -1070,7 +1099,7 @@ export default function App() {
   // ADMIN: COMMITTEE
   async function saveCommittee(e) {
     e.preventDefault();
-    if (!isAdmin || authLoading) return;
+    if (!isAdmin || authLoading || committeeUploading) return;
     setAuthLoading(true);
     try {
       const query = editingCommittee ? supabase.from("committee_members").update(committeeForm).eq("id", editingCommittee) : supabase.from("committee_members").insert(committeeForm);
@@ -1089,6 +1118,7 @@ export default function App() {
     }
   }
   async function deleteCommittee(id) {
+    if (authLoading || committeeUploading) return;
     if (!isAdmin || !window.confirm(t("Delete this committee member?"))) return;
     const {
       error
@@ -1136,9 +1166,6 @@ export default function App() {
   }, (_, index) => `Dakhil-${2006 + index}`);
   const alumniBatchNames = alumni.map(person => formatBatchName(person.batch)).filter(Boolean);
   const displayedBatchNames = [...new Set([...generatedBatchNames, ...batches.map(batch => formatBatchName(batch.name)), ...alumniBatchNames])].sort((a, b) => {
-    const orderA = batches.find(row => formatBatchName(row.name) === a)?.display_order ?? content.items.find(i => i.kind === 'batch' && i.key === a)?.display_order ?? 0;
-    const orderB = batches.find(row => formatBatchName(row.name) === b)?.display_order ?? content.items.find(i => i.kind === 'batch' && i.key === b)?.display_order ?? 0;
-    if (Number(orderA) !== Number(orderB)) return Number(orderA) - Number(orderB);
     const yearA = Number(a.match(/\d{4}$/)?.[0] || 0);
     const yearB = Number(b.match(/\d{4}$/)?.[0] || 0);
     return yearA - yearB;
@@ -1160,12 +1187,10 @@ export default function App() {
           </button>
 
           <nav className="nav-links" ref={navRef} aria-label={t("Main navigation")}>
-            {navItems.filter(item => item !== "Gallery").map(item => item === "Alumni" ? <details className="alumni-menu" key={item}><summary className={["Alumni", "Gallery"].includes(page) ? "nav-link active" : "nav-link"} aria-current={["Alumni", "Gallery"].includes(page) ? "location" : undefined}>{t("Alumni \u25BE")}</summary><div className="alumni-submenu"><button onClick={() => navigate("Alumni")}>{t("Alumni")}</button><button onClick={() => navigate("Gallery")}>{t("Gallery")}</button></div></details> : <button key={item} aria-current={(publicView ? activeSection === item : page === item) ? "location" : undefined} className={(publicView ? activeSection === item : page === item) ? "nav-link active" : "nav-link"} onClick={() => navigate(item)}>
-                {t(item)}
-              </button>)}
+            {navItems.map(item => <button key={item} aria-current={(publicView ? activeSection === item : page === item || item === 'Alumni' && page === 'Gallery') ? 'location' : undefined} className={(publicView ? activeSection === item : page === item || item === 'Alumni' && page === 'Gallery') ? 'nav-link active' : 'nav-link'} onClick={() => navigate(item)}>{t(item)}</button>)}
 
           </nav>
-          <div className="account-control"><LanguageToggle />{session ? <details><summary aria-label={t("Open account options")}>{profile?.photo_url ? <img src={profile.photo_url} alt={t("My account")} /> : <UserCircle size={28} />}</summary><div className="account-menu"><button onClick={() => navigate("Profile")}>{t("My Profile")}</button>{isAdmin && <button onClick={() => navigate("Admin")}>{t("Admin Dashboard")}</button>}<button onClick={logout}>{t("Logout")}</button></div></details> : <button className="nav-login" onClick={openLoginOptions}><LogIn size={16} />{t("Login")}</button>}</div>
+          <div className="account-control"><LanguageToggle />{session ? <details><summary aria-label={t("Open account options")}>{profile?.photo_url ? <img src={profile.photo_url} alt={t("My account")} /> : <UserCircle size={28} />}<span className="account-name">{profile?.full_name || session.user.user_metadata?.full_name || t(loading ? "Loading account..." : "My account")}</span></summary><div className="account-menu"><p className="account-menu-name">{profile?.full_name || session.user.user_metadata?.full_name || t("My account")}</p><button onClick={() => navigate("Profile")}>{t("My Profile")}</button>{isAdmin && <button onClick={() => navigate("Admin")}>{t("Admin Dashboard")}</button>}<button onClick={logout}>{t("Logout")}</button></div></details> : <button className="nav-login" onClick={openLoginOptions}><LogIn size={16} />{t("Login")}</button>}</div>
         </div>
       </header>
 
@@ -1204,9 +1229,7 @@ export default function App() {
                 </div>
               </div>
             </section>
-            <div><Carousel items={content.items} />
-            {events.length > 0 && <section className="container section featured-events"><h2>{t("Featured Events")}</h2><div className="event-grid">{events.filter(event => event.enabled !== false).map(event => <article className="event-card" key={event.id}>{event.image_url && <img className="event-image" src={event.image_url} alt={event.title} />}<h3>{event.title}</h3><p>{event.description}</p><p>{event.event_date || t("Date to be announced")}{t("\xB7") + " "}{event.location}</p></article>)}</div></section>}
-            </div>
+            <Carousel items={content.items} />
 
             <section className="stats container">
               <div className="stat-card">
@@ -1217,7 +1240,7 @@ export default function App() {
 
               <div className="stat-card">
                 <CalendarDays size={27} />
-                <strong>{events.length}{t("+")}</strong>
+                <strong>{events.filter(event => event.enabled !== false).length}{t("+")}</strong>
                 <span>{t("Community Events")}</span>
               </div>
 
@@ -1233,13 +1256,9 @@ export default function App() {
 
         {/* ABOUT */}
         {publicView && <section id="about" className="page-section container">
-            <PageHeading label={t("ABOUT SMSA")} title={t("Our Story")} />{content.error && <div role="status"><p>{t(content.error)}</p><button className="btn-outline" onClick={content.reload}>{t("Retry additional content")}</button></div>}<ContentCard item={content.items.find(i => i.kind === "official" && i.enabled)} /><CommunityLinks items={content.items} /><AboutSlideshow items={content.items} />
-
-            <div className="content-card">
-              <h3>{t("Same Mind Student Association")}</h3>
-              <p>{t("SMSA is an alumni community for former students of Sakhipur Thana Sadar Dakhil Madrasah. Our purpose is to maintain lifelong connections, bring former classmates together, and create opportunities to support one another.")}</p>
-              <p>{t("No matter when we graduated or where life has taken us, we share a common history and a lasting connection.")}</p>
-            </div>
+            <PageHeading label={t("ABOUT SMSA")} title={content.items.find(i => i.kind === 'about' && i.key === 'story' && i.enabled)?.title || t("Our Story")} />
+            {content.error && <div role="status"><p>{t(content.error)}</p><button className="btn-outline" onClick={content.reload}>{t('Retry additional content')}</button></div>}
+            <div className="about-layout"><div className="about-copy"><span className="eyebrow">{t('TOGETHER ACROSS GENERATIONS')}</span><h2>{t('Same Mind Student Association')}</h2><p className="preserve-lines">{content.items.find(i => i.kind === 'about' && i.key === 'story' && i.enabled)?.description || content.items.find(i => i.kind === 'official' && i.enabled)?.description || t('SMSA is an alumni community for former students of Sakhipur Thana Sadar Dakhil Madrasah. Our purpose is to maintain lifelong connections, bring former classmates together, and create opportunities to support one another.')}</p><p>{t('No matter when we graduated or where life has taken us, we share a common history and a lasting connection.')}</p></div><AboutSlideshow items={content.items} /></div>
           </section>}
 
         {/* EVENTS */}
@@ -1264,13 +1283,13 @@ export default function App() {
                     </span>}
                 </article>)}
 
-              {events.length === 0 && <p className="empty-state">{t("No events have been published yet.")}</p>}
+              {events.filter(event => event.enabled !== false).length === 0 && <p className="empty-state">{t("No events have been published yet.")}</p>}
             </div>
           </section>}
 
         {/* ALUMNI */}
-        {page === "Alumni" && <section id="alumni" className="page-section container">
-            <PageHeading label={t("OUR NETWORK")} title={selectedBatch ? formatBatchName(selectedBatch) : t("Meet Our Alumni")} />
+        {(publicView || page === "Alumni") && <section id="alumni" className="page-section container">
+            <PageHeading label={t("OUR NETWORK")} title={selectedBatch ? formatBatchName(selectedBatch) : t("Our Batches")} />
 
             {!selectedBatch && <>
                 <div className="alumni-top-actions">
@@ -1326,7 +1345,7 @@ export default function App() {
               batch: selectedBatch
             });
           }}><Image size={20} />{t("Batch Gallery")}</button>
-                  <p className="preserve-lines">{content.items.find(i => i.kind === 'batch' && i.key === formatBatchName(selectedBatch) && i.enabled)?.description}</p>
+                  <p className="preserve-lines">{content.items.find(i => i.kind === 'batch' && formatBatchName(i.key) === formatBatchName(selectedBatch) && i.enabled)?.description}</p>
                 <div className="search-box">
                   <Search size={19} />
                   <input value={search} onChange={e => setSearch(e.target.value)} placeholder={t("Search alumni by name...")} />
@@ -1351,7 +1370,7 @@ export default function App() {
               setSelectedBatch(batchName);
               setSearch("");
             }}>
-                        {content.items.find(i => i.kind === 'batch' && i.key === formatBatchName(batchName) && i.enabled)?.image_url && <img className="batch-cover" src={content.items.find(i => i.kind === 'batch' && i.key === formatBatchName(batchName) && i.enabled).image_url} alt={batchName} />}
+                        {content.items.find(i => i.kind === 'batch' && formatBatchName(i.key) === formatBatchName(batchName) && i.enabled)?.image_url && <img className="batch-cover" src={content.items.find(i => i.kind === 'batch' && formatBatchName(i.key) === formatBatchName(batchName) && i.enabled).image_url} alt={batchName} />}
                         <div className="batch-card-icon">
                           <GraduationCap size={30} />
                         </div>
@@ -1438,7 +1457,7 @@ export default function App() {
                               <span>{t("Image unavailable")}</span>
                             </div>}
 
-                          <div className="gallery-card-content"><strong>{photo.uploader_name || alumni.find(member => member.id === photo.uploader_id)?.full_name || (photo.uploader_id === session?.user.id ? profile?.full_name : null) || t("Member")}</strong>
+                          <div className="gallery-card-content"><strong>{photo.uploader_name || (isAdmin ? members.find(member => member.id === photo.uploader_id)?.full_name : null) || alumni.find(member => member.id === photo.uploader_id)?.full_name || (photo.uploader_id === session?.user.id ? profile?.full_name : null) || t("Member")}</strong>
                             {photo.caption && <p>{photo.caption}</p>}
 
                             {photo.status !== "approved" && <span className={`gallery-status ${photo.status}`}>
@@ -1689,17 +1708,16 @@ export default function App() {
         {page === "Admin" && <section className="page-section container">
             <PageHeading label={t("ADMINISTRATION")} title={t("Admin Dashboard")} />
 
-            {!isAdmin ? <div className="content-card">
+            <Suspense fallback={<p role="status">{t("Loading management...")}</p>}>{!isAdmin ? <div className="content-card">
                 <ShieldCheck size={35} />
                 <h3>{t("Admin access required")}</h3>
               </div> : <>
                 <div className="admin-intro"><p>{t("Manage your association")}</p><h2>{t("SMSA Control Centre")}</h2></div>
-                {route.panel === 'overview' ? <div className="dashboard-grid">{[['batches', 'Batch Management'], ['members', 'Member Management'], ['content', 'Website Content'], ['gallery', 'Gallery Moderation'], ['events', 'Events Management'], ['committee', 'Committee Management']].map(([panel, label]) => <button className="dashboard-card" key={panel} onClick={() => go({
-              panel,
-              memberBatch: null,
-              adminBatch: null
-            })}><Layers size={30} /><h3>{t(label)}</h3><ArrowRight /></button>)}</div> : <button className="btn-outline" onClick={back}>{t("Back")}</button>}
-                <div hidden={route.panel !== 'content'}><ContentManager content={content} userId={session?.user.id} batchNames={displayedBatchNames} /></div>
+                <DashboardNavigation panel={route.panel} onSelect={panel => go({panel,memberBatch:null,adminBatch:null,editMember:null})} />
+                {route.panel === 'overview' && <DashboardOverview onSelect={panel => go({panel,memberBatch:null,adminBatch:null})} />}
+                {route.panel === 'about' && <AboutManager content={content} userId={session?.user.id} />}
+                {route.panel === 'social' && <SocialLinksManager content={content} />}
+                {route.panel === 'content' && <ContentManager content={content} userId={session?.user.id} batchNames={displayedBatchNames} kinds={['official','carousel']} />}
 
                 <div hidden={route.panel !== "batches"} className="admin-section admin-batches">{/* BATCH MANAGEMENT */}
                 <div className="content-card">
@@ -1749,6 +1767,7 @@ export default function App() {
 
 
 
+                {route.panel === 'batches' && <ContentManager content={content} userId={session?.user.id} batchNames={displayedBatchNames} kinds={['batch']} />}
                 </div><div hidden={route.panel !== "gallery"} className="admin-section admin-gallery">{/* GALLERY APPROVAL */}
                 <div className="content-card" style={{
               marginTop: 24
@@ -1756,17 +1775,18 @@ export default function App() {
                   <h3>
                     <Image size={21} style={{
                   verticalAlign: "middle"
-                }} />{" "}{t("Gallery Photo Approval (")}{pendingGallery.length}{t(")")}</h3>
+                }} />{" "}{t("Gallery Management (")}{pendingGallery.filter(photo => galleryFilter === "all" || photo.status === galleryFilter).length}{t(")")}</h3>
 
                   <p>{t("Review submitted photos. Approved photos will be visible to everyone in the Gallery.")}</p>
 
                   <button type="button" className="btn-outline" onClick={() => loadPendingGallery(true)} style={{
                 marginBottom: 20
               }}>
-                    <RefreshCw size={16} />{t("Refresh Pending Photos")}</button>
+                    <RefreshCw size={16} />{t("Refresh photos")}</button>
 
-                  {pendingGallery.length === 0 ? <p className="empty-state">{t("No pending photos.")}</p> : <div className="gallery-grid">
-                      {pendingGallery.map(photo => {
+                  <label>{t('Photo status')}<select value={galleryFilter} onChange={e => setGalleryFilter(e.target.value)}>{['pending','approved','rejected','all'].map(status => <option key={status} value={status}>{t(status)}</option>)}</select></label>
+                  {pendingGallery.filter(photo => galleryFilter === 'all' || photo.status === galleryFilter).length === 0 ? <p className="empty-state">{t("No photos with this status.")}</p> : <div className="gallery-grid">
+                      {pendingGallery.filter(photo => galleryFilter === 'all' || photo.status === galleryFilter).map(photo => {
                   const uploader = members.find(member => member.id === photo.uploader_id);
                   const photoBatch = batches.find(batch => String(batch.id) === String(photo.batch_id));
                   return <article className="gallery-card" key={photo.id}>
@@ -1777,14 +1797,14 @@ export default function App() {
 
                             <div className="gallery-card-content">
                               <strong>
-                                {uploader?.full_name || t("Unknown member")}
+                                {uploader?.full_name || photo.uploader_name || t("Unknown member")}
                               </strong>
 
                               <span>
                                 {photoBatch ? formatBatchName(photoBatch.name) : t("Batch unavailable")}
                               </span>
 
-                              <p>{photo.caption || t("No caption")}</p>
+                              <p>{photo.caption || t("No caption")}</p><span className={"gallery-status " + photo.status}>{t(photo.status)}</span>
 
                               <div className="gallery-admin-actions">
                                 <button type="button" className="approve-btn" onClick={() => reviewGalleryPhoto(photo.id, "approved")}>
@@ -1913,16 +1933,13 @@ export default function App() {
             }}>
                   <h3>{t("Manage Events")}</h3>
 
-                  <form onSubmit={saveEvent}><label>{t("Display Order")}<input type="number" value={eventForm.display_order} onChange={e => setEventForm({
-                    ...eventForm,
-                    display_order: Number(e.target.value)
-                  })} /></label><label className="checkbox-label"><input type="checkbox" checked={eventForm.enabled} onChange={e => setEventForm({
+                  <form onSubmit={saveEvent}><fieldset disabled={authLoading || eventUploading}><label className="checkbox-label"><input type="checkbox" checked={eventForm.enabled} onChange={e => setEventForm({
                     ...eventForm,
                     enabled: e.target.checked
-                  })} />{t("Publicly visible")}</label><ImageUpload userId={session?.user.id} admin onUploaded={image_url => setEventForm(d => ({
+                  })} />{t("Publicly visible")}</label><ImageUpload userId={session?.user.id} admin onBusy={setEventUploading} onUploaded={image_url => setEventForm(d => ({
                   ...d,
                   image_url
-                }))} />{eventForm.image_url && <img className="image-preview" src={eventForm.image_url} alt={t("Event preview")} />}
+                }))} />{eventForm.image_url && <><img className="image-preview" src={eventForm.image_url} alt={t("Event preview")} /><button type="button" className="btn-outline" onClick={() => setEventForm(d => ({...d,image_url:""}))}>{t("Remove image")}</button></>}
                     <label>{t("Event Title")}</label>
                     <input required value={eventForm.title} onChange={e => setEventForm({
                   ...eventForm,
@@ -1956,7 +1973,7 @@ export default function App() {
                   setEditingEvent(null);
                   setEventForm(emptyEventForm);
                 }}>{t("Cancel")}</button>}
-                  </form>
+                  </fieldset></form>
 
                   {events.map(event => <div className="pending-row" key={event.id}>
                       <div>
@@ -1973,7 +1990,6 @@ export default function App() {
                       event_date: event.event_date || "",
                       image_url: event.image_url || "",
                       enabled: event.enabled !== false,
-                      display_order: event.display_order || 0,
                       location: event.location || ""
                     });
                   }}>{t("Edit")}</button>
@@ -1991,7 +2007,7 @@ export default function App() {
             }}>
                   <h3>{t("Manage Committee")}</h3>
 
-                  <form onSubmit={saveCommittee}><ImageUpload userId={session?.user.id} admin onUploaded={photo_url => setCommitteeForm(d => ({
+                  <form onSubmit={saveCommittee}><fieldset disabled={authLoading || committeeUploading}><ImageUpload userId={session?.user.id} admin onBusy={setCommitteeUploading} onUploaded={photo_url => setCommitteeForm(d => ({
                   ...d,
                   photo_url
                 }))} />
@@ -2031,12 +2047,6 @@ export default function App() {
                   photo_url: e.target.value
                 })} />
 
-                    <label>{t("Display Order")}</label>
-                    <input type="number" value={committeeForm.display_order} onChange={e => setCommitteeForm({
-                  ...committeeForm,
-                  display_order: Number(e.target.value)
-                })} />
-
                     <button className="btn-primary">
                       <Plus size={16} />
                       {editingCommittee ? t("Update") : t("Add Committee Member")}
@@ -2046,7 +2056,7 @@ export default function App() {
                   setEditingCommittee(null);
                   setCommitteeForm(emptyCommitteeForm);
                 }}>{t("Cancel")}</button>}
-                  </form>
+                  </fieldset></form>
 
                   {committee.map(person => <div className="pending-row" key={person.id}>
                       <div>
@@ -2065,7 +2075,6 @@ export default function App() {
                       introduction: person.introduction || "",
                       is_current: person.is_current !== false,
                       committee_year: person.committee_year || new Date().getFullYear(),
-                      display_order: person.display_order || 0
                     });
                   }}>{t("Edit")}</button>
 
@@ -2074,7 +2083,7 @@ export default function App() {
                     </div>)}
                 </div>
 
-              </div></>}
+              </div></>}</Suspense>
           </section>}
       </main>
 
@@ -2087,7 +2096,8 @@ export default function App() {
             <span>{t("Connecting generations, building friendships.")}</span>
           </div>
 
-          <p>{t("\xA9") + " "}{new Date().getFullYear()}{t("SMSA. All rights reserved.")}</p>
+          <div className="footer-community"><h3>{t("Stay connected")}</h3><CommunityLinks items={content.items} /></div>
+          <p>{t("\xA9") + " "}{new Date().getFullYear()}{" "}{t("SMSA. All rights reserved.")}</p>
         </div>
       </footer>
     </div>;

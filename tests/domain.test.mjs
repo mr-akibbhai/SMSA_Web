@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import {formatBatchName,batchUpdatePayload,compareDisplayOrder,validateImage,validatePhone,saveSiteContent,updateMemberProfile,deleteGalleryRecord} from '../src/lib/domain.js';
 import {friendlyMessage} from '../src/lib/notifications.js';
+import {normalizeRoute} from '../src/lib/navigation.js';
+assert.equal(normalizeRoute({page:'Admin'}).search,'','Partial history entries keep route defaults');
+assert.equal(normalizeRoute({page:'Alumni',search:{unsafe:true}}).search,'');
+assert.equal(normalizeRoute({page:'unknown'}).page,'Home');
+assert.equal(normalizeRoute({page:'Admin',isAdmin:true}).isAdmin,undefined,'URLs do not supply authorization');
+assert.deepEqual(batchUpdatePayload({name:'Batch 2020'},'Dakhil-2020'),{name:'Batch 2020'},'Editing without ordering preserves existing name and database fields');
 for(const input of ['Batch-20','Dakhil-20','Dakhil-2020',' batch 20 ','DAKHIL2020'])assert.equal(formatBatchName(input),'Dakhil-2020');
 assert.equal(formatBatchName(null),'');assert.equal(formatBatchName('Custom batch'),'Custom batch');assert.equal(formatBatchName('Batch-99'),'Dakhil-2099');assert.equal(formatBatchName('Batch-1999'),'Dakhil-1999');
 assert.equal(validateImage({type:'image/png',size:10*1024*1024}),'');assert.ok(validateImage({type:'image/png',size:10*1024*1024+1}));assert.ok(validateImage({type:'image/svg+xml',size:100}));

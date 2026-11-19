@@ -1,3 +1,51 @@
+> বর্তমান redesign revision (১৯ নভেম্বর ২০২৬): এই অংশ নিচের historical UI বিবরণকে supersede করে। SQL-এর জন্য supabase/LIVE_MIGRATION_PLAN_BN.md অপরিবর্তিত authoritative plan।
+
+## বর্তমান redesign: বাস্তবায়ন ও যাচাই
+
+স্থানীয় project-এ implementation হয়েছে। Live Supabase connection, SQL execution, .env edit, GitHub push বা deployment হয়নি। Browser-এর সব records/accounts/images/uploads synthetic fixture; real member data ব্যবহার হয়নি।
+
+### পরিবর্তিত source ও configuration
+
+- src/App.jsx: responsive named account header; explicit Home redirect after successful login/signup; email-confirmation signup-এও Home + confirmation notice। Deferred auth callbacks ও account/public-request sequence checks দিয়ে stale responses কমানো হয়েছে। একই account reload-এ profile নাম মুছে যায় না; role query ব্যর্থ হলেও loaded profile নাম রাখা হয়। Own registration/profile save approval_status পাঠায় না; existing server approval rules বহাল থাকে। Existing passing_year profile edit-এ রাখা হয়।
+- src/App.jsx: Home → About → Events → Alumni/Batch continuous flow; duplicated Featured Events সরানো। Committee আলাদা navigation/page-এ থাকে। Gallery-এর navbar/submenu সরানো; batch detail-এর Gallery button ও পুরোনো Gallery routes অক্ষত। Admin-এর gallery status filter pending/approved/rejected/all; uploader labels-এর admin profile fallback। Hidden Events public stats-এ গণনা হয় না।
+- src/components/Management.jsx (নতুন): dedicated About text/images ও Facebook/Messenger editors; professional CMS overview/navigation। About text uses site_content(kind=about,key=story), image rows use kind=about with unique keys। নতুন images সর্বোচ্চ চারটি; পূর্ববর্তী অতিরিক্ত records সরানো হয় না। Image replace/remove explicit action; physical Storage files delete হয় না। Admin permission frontend থেকে দেওয়া হয়নি।
+- src/components/ContentFeatures.jsx: scoped brand/highlight এবং batch-content editors; About/Social generic editor থেকে আলাদা। Upload-এর local preview, busy state, safe HTTPS/social icons, natural-key edit-এর existing ID-safe writes রাখা। Required-field marker control-এর নিচে না পড়ে label-এর পাশে দেখায়। site_content creation order-এ পড়ে; display_order-based ordering/control বাদ।
+- src/components/Experience.jsx: About-এর ২ সেকেন্ড opacity fade; hidden images বাদ। Carousel-এর fractional scroll accumulation; hover/focus-এ pause, manual interaction-এর ৭ সেকেন্ড pause, drag/touch/arrows ও existing seamless cycle রাখা। Reduced-motion preference মানা হয়।
+- src/redesign.css (নতুন), src/main.jsx: navy/teal/sky/purple/gold visual theme, lightweight decorative motion, responsive header/CMS/forms/cards/footer, compact mobile statistics। About fade fixed frame-এ চলে; page overflow checks হয়েছে।
+- src/lib/navigation.js: malformed/partial hash/history state normalized; missing search/default fields আর page crash করে না। Unknown properties (যেমন isAdmin) route দিয়ে authorization দেয় না। Back/Forward ও batch/gallery context রাখা।
+- src/components/BatchEditor.jsx, src/lib/domain.js: display-order UI বাদ; name-only edit existing legacy batch name/other columns রাখে। RPC-based linked-content check/deletion protections অক্ষত।
+- src/lib/i18n.jsx, src/lib/translations.bn.json, src/lib/notifications.js: নতুন Bengali labels; textarea/select-এর content ভুলভাবে accessible label-এ যুক্ত হওয়ার bug ঠিক। Safe notifications রাখা।
+- package.json ও package-lock.json: test-only Playwright dependency; test:browser ও test:migrations commands। CMS code lazy-loaded; production build-এ management আলাদা chunk।
+
+### এই revision-এর complete file manifest
+
+Modified: src/App.jsx; src/main.jsx; src/components/BatchEditor.jsx; src/components/ContentFeatures.jsx; src/components/Experience.jsx; src/lib/domain.js; src/lib/i18n.jsx; src/lib/navigation.js; src/lib/notifications.js; src/lib/translations.bn.json; package.json; package-lock.json; tests/content.test.mjs; tests/domain.test.mjs; HANDOVER_BN.md; UPGRADE_CHECKLIST.md।
+
+Added: src/components/Management.jsx; src/redesign.css; tests/mock-supabase.js; tests/redesign-browser.mjs। Generated verification artifacts: artifacts/redesign/home-desktop.png; home-mobile.png; admin-desktop.png; admin-mobile.png। Existing SQL migrations/preflight/credentials অপরিবর্তিত।
+
+### Tests ও local verification
+
+- npm.cmd test: domain/content/structure suites। Route defaults/type protection, name-only batch edits, dedicated management sections, About ordering independence এবং existing payload/security invariants পরীক্ষা করে। SSR test-এ unnecessary dependency scanning বন্ধ করে shutdown-time scan errors সমাধান করা হয়েছে।
+- npm.cmd run test:migrations: static preservation/safety suite; SQL execute হয় না।
+- npm.cmd run test:browser: tests/redesign-browser.mjs + tests/mock-supabase.js। Disposable local Vite server বাস্তব Supabase module-এর বদলে test adapter ব্যবহার করে। All non-local network blocked; synthetic image host locally fulfilled। Real Supabase request হলে test fail করে। Test runner installed Windows Chrome ব্যবহার করে; SMSA_TEST_BROWSER দিয়ে অন্য Chromium executable বেছে নেওয়া যায়। Chrome না থাকলে Playwright Chromium installation প্রয়োজন।
+- Browser coverage: 320/390/768/1024/1440px public layout; 320/768px সব CMS panel; mobile profile-sourced name (metadata-তে আলাদা নাম), login/signup/confirmation redirects, logout, member Admin-route denial, role-error resilience, own-profile save, 2s fade, reduced-motion, rail movement/hover/click, legacy batch-to-alumni match, uploader labels, About image create/replace/edit/remove, Events image/create/edit/delete/separation, pending/approved/rejected moderation/admin deletion, social links এবং image paths।
+- npm.cmd run build: production build verification। No dedicated lint script exists। Browser run শেষে dev server বন্ধ হয়।
+- Screenshots: artifacts/redesign/home-desktop.png, home-mobile.png, admin-desktop.png, admin-mobile.png। এগুলো synthetic content দিয়ে তোলা; real site/data proof নয়।
+- চারটি SQL migration আগের artifacts/SMSA_SQL_revision_20261119.zip-এর complete files-এর সঙ্গে byte-content comparison-এ অপরিবর্তিত। এই redesign-এ SQL লেখা/বদলানো হয়নি।
+
+### Database/manual steps ও অবশিষ্ট সীমা
+
+1. Live/staging metadata ও all applicable permissive/restrictive policies inspect করুন; supabase/preflight_checks.sql এবং supabase/LIVE_MIGRATION_PLAN_BN.md অনুসরণ করুন। Inspection এখানে চালানো হয়নি।
+2. site_content-এর about kind, existing columns/unique constraint এবং admin disabled-record read/write দরকার। site-media public 10 MB JPEG/PNG/WebP settings/policies দরকার; নতুন Storage UPDATE/DELETE permissions লাগে না। Image paths admin/UUID.ext ও user-id/UUID.ext অপরিবর্তিত।
+3. Gallery paths batch-id/user-id/UUID-filename। Private signed URLs, own active-batch uploads, review/delete flow এবং legacy 100-approved-photo cap রাখা। Actual RLS, service Storage operations ও concurrent 100-photo limit এখনও live/staging test দরকার।
+4. Safe batch deletion-এর smsa_batch_has_content/smsa_delete_empty_batch ও gallery uploader-name RPC-এর dependencies আগের migrations-এ আছে। Supabase-managed Storage trigger privilege, locking/concurrency এবং function ownership manual verification ছাড়া compatible দাবি করা যাবে না।
+5. Manual migration order: 20261117_content_features.sql → 20261117_gallery_guards.sql → 20261119_ui_experience.sql → 20261119_batch_actions.sql। প্রতিটি file-এর আগে fresh metadata fingerprint review; blind execution নয়। Duplicate filename-date prefixes থাকায় history reconcile ছাড়া CLI db push নয়। ইতিমধ্যে applied হলে আবার চালানোর আগে state/definitions review করুন।
+6. Batch 2006…2026, Batch-20, Dakhil-20 UI-তে Dakhil-YYYY হিসেবে মেলে; Dakhil-2027/new batches একই format। Database records mass rename হয়নি। Actual stored-name conversion চাইলে live reference audit ও আলাদা reviewed data migration দরকার; এই task-এ তা করা হয়নি।
+7. Email confirmation প্রয়োজন হলে confirmation email-এর পরে member নিজের profile সম্পূর্ণ করবে; unauthenticated signup-এ profile insert করা হয় না। Existing SMTP/redirect URL/Edge Function configuration এখানে যাচাই হয়নি। Admin account operations-এর existing admin-manage-user Edge Function অপরিবর্তিত।
+8. Desktop Chrome viewport emulation হয়েছে; physical Android/iOS devices, real credentials, deployed performance ও production data দিয়ে test হয়নি। Full production compatibility/security certification দাবি করা হচ্ছে না।
+
+---
+
 > SQL নির্দেশনার আপডেট: বর্তমান live setup-এর জন্য [নতুন manual migration review plan](supabase/LIVE_MIGRATION_PLAN_BN.md) অনুসরণ করুন। নিচের পুরোনো fresh-install SQL নির্দেশনা superseded।
 
 # SMSA Upgrade — বাংলা handover (১৯ নভেম্বর ২০২৬)

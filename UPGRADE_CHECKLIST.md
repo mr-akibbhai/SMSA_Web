@@ -3,7 +3,9 @@
 - [x] Gallery is_admin consistency, legacy normalization, repeatable private-bucket guards
 - [x] Identity-safe content editing and regression tests
 - [x] History-backed isolated details and Back navigation
-- [x] Home-first layout; About fade; batch/committee rails; display-order controls
+- [x] Home-first layout; About fade; batch/committee rails; independent About/Events content (display-order UI removed)
+- [x] Dedicated About/Social managers, colourful responsive redesign, named mobile account header and Home auth redirects
+- [x] Offline Playwright browser coverage, CMS screenshots and reduced-motion checks
 - [x] Admin panels; batch/member navigation; identity-safe member update payloads
 - [x] Passing Year removed from UI; database column/historical values preserved
 - [x] Central bilingual UI; required indicators; safe notifications; 10 MB validation

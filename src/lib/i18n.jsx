@@ -19,8 +19,11 @@ export function FormAccessibility(){
    if(field.required)label.dataset.required='true';else delete label.dataset.required;
    if(!field.id)field.id='smsa-field-'+index;
    label.htmlFor=field.id;
-   if(!field.hasAttribute('aria-label') || field.dataset.autoLabel){field.dataset.autoLabel='true';field.setAttribute('aria-label',label.textContent.trim() || t('Field'));}
-   if((!field.placeholder || field.dataset.autoPlaceholder) && ['text','email','password','tel','number'].includes(field.type)){field.dataset.autoPlaceholder='true';field.placeholder=label.textContent.trim() || t('Enter a value');}
+   const caption=label.cloneNode(true);
+   caption.querySelectorAll('input,select,textarea,button').forEach(control=>control.remove());
+   const text=caption.textContent.trim();
+   if(!field.hasAttribute('aria-label') || field.dataset.autoLabel){field.dataset.autoLabel='true';field.setAttribute('aria-label',text || t('Field'));}
+   if((!field.placeholder || field.dataset.autoPlaceholder) && ['text','email','password','tel','number'].includes(field.type)){field.dataset.autoPlaceholder='true';field.placeholder=text || t('Enter a value');}
   });}
   decorate();const observer=new MutationObserver(decorate);observer.observe(document.body,{childList:true,subtree:true});return()=>observer.disconnect();
  },[language]);
